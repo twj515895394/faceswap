@@ -11,12 +11,13 @@ from time import time
 from lib.gui.control_helper import set_slider_rounding
 from lib.gui.custom_widgets import Tooltip
 from lib.gui.utils import get_images
+from lib.utils import get_module_objects
 
 from .control import Navigation, BackgroundImage
 from .editor import (BoundingBox, ExtractBox, Landmarks, Mask,  # noqa pylint:disable=unused-import
                      Mesh, View)
 
-logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+logger = logging.getLogger(__name__)
 
 # LOCALES
 _LANG = gettext.translation("tools.manual", localedir="locales", fallback=True)
@@ -42,7 +43,7 @@ class DisplayFrame(ttk.Frame):  # pylint:disable=too-many-ancestors
 
         self._globals = tk_globals
         self._det_faces = detected_faces
-        self._optional_widgets = dict()
+        self._optional_widgets = {}
 
         self._actions_frame = ActionsFrame(self)
         main_frame = ttk.Frame(self)
@@ -74,28 +75,28 @@ class DisplayFrame(ttk.Frame):  # pylint:disable=too-many-ancestors
     @property
     def _helptext(self):
         """ dict: {`name`: `help text`} Helptext lookup for navigation buttons """
-        return dict(
-            play=_("Play/Pause (SPACE)"),
-            beginning=_("Go to First Frame (HOME)"),
-            prev=_("Go to Previous Frame (Z)"),
-            next=_("Go to Next Frame (X)"),
-            end=_("Go to Last Frame (END)"),
-            extract=_("Extract the faces to a folder... (Ctrl+E)"),
-            save=_("Save the Alignments file (Ctrl+S)"),
-            mode=_("Filter Frames to only those Containing the Selected Item (F)"),
-            distance=_("Set the distance from an 'average face' to be considered misaligned. "
-                       "Higher distances are more restrictive"))
+        return {
+            "play": _("Play/Pause (SPACE)"),
+            "beginning": _("Go to First Frame (HOME)"),
+            "prev": _("Go to Previous Frame (Z)"),
+            "next": _("Go to Next Frame (X)"),
+            "end": _("Go to Last Frame (END)"),
+            "extract": _("Extract the faces to a folder... (Ctrl+E)"),
+            "save": _("Save the Alignments file (Ctrl+S)"),
+            "mode": _("Filter Frames to only those Containing the Selected Item (F)"),
+            "distance": _("Set the distance from an 'average face' to be considered misaligned. "
+                          "Higher distances are more restrictive")}
 
     @property
     def _btn_action(self):
         """ dict: {`name`: `action`} Command lookup for navigation buttons """
-        actions = dict(play=self._navigation.handle_play_button,
-                       beginning=self._navigation.goto_first_frame,
-                       prev=self._navigation.decrement_frame,
-                       next=self._navigation.increment_frame,
-                       end=self._navigation.goto_last_frame,
-                       extract=self._det_faces.extract,
-                       save=self._det_faces.save)
+        actions = {"play": self._navigation.handle_play_button,
+                   "beginning": self._navigation.goto_first_frame,
+                   "prev": self._navigation.decrement_frame,
+                   "next": self._navigation.increment_frame,
+                   "end": self._navigation.goto_last_frame,
+                   "extract": self._det_faces.extract,
+                   "save": self._det_faces.save}
         return actions
 
     @property
@@ -146,48 +147,48 @@ class DisplayFrame(ttk.Frame):  # pylint:disable=too-many-ancestors
         lbl_frame.pack(side=tk.RIGHT)
         tbox = ttk.Entry(lbl_frame,
                          width=7,
-                         textvariable=self._globals.tk_transport_index,
+                         textvariable=self._globals.var_transport_index,
                          justify=tk.RIGHT)
         tbox.pack(padx=0, side=tk.LEFT)
-        lbl = ttk.Label(lbl_frame, text="/{}".format(max_frame))
+        lbl = ttk.Label(lbl_frame, text=f"/{max_frame}")
         lbl.pack(side=tk.RIGHT)
 
         cmd = partial(set_slider_rounding,
-                      var=self._globals.tk_transport_index,
+                      var=self._globals.var_transport_index,
                       d_type=int,
                       round_to=1,
                       min_max=(0, max_frame))
 
         nav = ttk.Scale(frame,
-                        variable=self._globals.tk_transport_index,
+                        variable=self._globals.var_transport_index,
                         from_=0,
                         to=max_frame,
                         command=cmd)
         nav.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self._globals.tk_transport_index.trace("w", self._set_frame_index)
-        return dict(entry=tbox, scale=nav, label=lbl)
+        self._globals.var_transport_index.trace_add("write", self._set_frame_index)
+        return {"entry": tbox, "scale": nav, "label": lbl}
 
     def _set_frame_index(self, *args):  # pylint:disable=unused-argument
         """ Set the actual frame index based on current slider position and filter mode. """
         try:
-            slider_position = self._globals.tk_transport_index.get()
+            slider_position = self._globals.var_transport_index.get()
         except TclError:
             # don't update the slider when the entry box has been cleared of any value
             return
         frames = self._det_faces.filter.frames_list
         actual_position = max(0, min(len(frames) - 1, slider_position))
         if actual_position != slider_position:
-            self._globals.tk_transport_index.set(actual_position)
+            self._globals.var_transport_index.set(actual_position)
         frame_idx = frames[actual_position] if frames else -1
         logger.trace("slider_position: %s, frame_idx: %s", actual_position, frame_idx)
-        self._globals.tk_frame_index.set(frame_idx)
+        self._globals.var_frame_index.set(frame_idx)
 
     def _add_transport(self):
         """ Add video transport controls """
         frame = ttk.Frame(self._transport_frame)
         frame.pack(side=tk.BOTTOM, fill=tk.X)
         icons = get_images().icons
-        buttons = dict()
+        buttons = {}
         for action in ("play", "beginning", "prev", "next", "end", "save", "extract", "mode"):
             padx = (0, 6) if action in ("play", "prev", "mode") else (0, 0)
             side = tk.RIGHT if action in ("extract", "save", "mode") else tk.LEFT
@@ -237,14 +238,14 @@ class DisplayFrame(ttk.Frame):  # pylint:disable=too-many-ancestors
         frame: :class:`tkinter.ttk.Frame`
             The Filter Frame that holds the filter combo box
         """
-        self._globals.tk_filter_mode.set("All Frames")
-        self._globals.tk_filter_mode.trace("w", self._navigation.nav_scale_callback)
+        self._globals.var_filter_mode.set("All Frames")
+        self._globals.var_filter_mode.trace("w", self._navigation.nav_scale_callback)
         nav_frame = ttk.Frame(frame)
         lbl = ttk.Label(nav_frame, text="Filter:")
         lbl.pack(side=tk.LEFT, padx=(0, 5))
         combo = ttk.Combobox(
             nav_frame,
-            textvariable=self._globals.tk_filter_mode,
+            textvariable=self._globals.var_filter_mode,
             state="readonly",
             values=self._filter_modes)
         combo.pack(side=tk.RIGHT)
@@ -260,7 +261,7 @@ class DisplayFrame(ttk.Frame):  # pylint:disable=too-many-ancestors
             The Filter Frame that holds the filter threshold slider
         """
         slider_frame = ttk.Frame(frame)
-        tk_var = self._globals.tk_filter_distance
+        tk_var = self._globals.var_filter_distance
 
         min_max = (5, 20)
         ctl_frame = ttk.Frame(slider_frame)
@@ -284,22 +285,22 @@ class DisplayFrame(ttk.Frame):  # pylint:disable=too-many-ancestors
             Tooltip(item,
                     text=self._helptext["distance"],
                     wrap_length=200)
-        tk_var.trace("w", self._navigation.nav_scale_callback)
+        tk_var.trace_add("write", self._navigation.nav_scale_callback)
         self._optional_widgets["distance_slider"] = slider_frame
 
     def pack_threshold_slider(self):
         """ Display or hide the threshold slider depending on the current filter mode. For
         misaligned faces filter, display the slider. Hide for all other filters. """
-        if self._globals.tk_filter_mode.get() == "Misaligned Faces":
+        if self._globals.var_filter_mode.get() == "Misaligned Faces":
             self._optional_widgets["distance_slider"].pack(side=tk.LEFT)
         else:
             self._optional_widgets["distance_slider"].pack_forget()
 
     def cycle_filter_mode(self):
         """ Cycle the navigation mode combo entry """
-        current_mode = self._globals.filter_mode
+        current_mode = self._globals.var_filter_mode.get()
         idx = (self._filter_modes.index(current_mode) + 1) % len(self._filter_modes)
-        self._globals.tk_filter_mode.set(self._filter_modes[idx])
+        self._globals.var_filter_mode.set(self._filter_modes[idx])
 
     def set_action(self, key):
         """ Set the current action based on keyboard shortcut
@@ -318,7 +319,7 @@ class DisplayFrame(ttk.Frame):  # pylint:disable=too-many-ancestors
         framesize = (event.width, event.height)
         logger.trace("Resizing video frame. Framesize: %s", framesize)
         self._globals.set_frame_display_dims(*framesize)
-        self._globals.tk_update.set(True)
+        self._globals.var_full_update.set(True)
 
     # << TRANSPORT >> #
     def _play(self, *args, frame_count=None):  # pylint:disable=unused-argument
@@ -366,7 +367,7 @@ class ActionsFrame(ttk.Frame):  # pylint:disable=too-many-ancestors
         self._buttons = self._add_buttons()
         self._static_buttons = self._add_static_buttons()
         self._selected_action = self._set_selected_action_tkvar()
-        self._optional_buttons = dict()  # Has to be set from parent after canvas is initialized
+        self._optional_buttons = {}  # Has to be set from parent after canvas is initialized
 
     @property
     def actions(self):
@@ -382,19 +383,19 @@ class ActionsFrame(ttk.Frame):  # pylint:disable=too-many-ancestors
     def key_bindings(self):
         """ dict: {`key`: `action`}. The mapping of key presses to actions. Keyboard shortcut is
         the first letter of each action. """
-        return {"F{}".format(idx + 1): action for idx, action in enumerate(self._actions)}
+        return {f"F{idx + 1}": action for idx, action in enumerate(self._actions)}
 
     @property
     def _helptext(self):
         """ dict: `button key`: `button helptext`. The help text to display for each button. """
         inverse_keybindings = {val: key for key, val in self.key_bindings.items()}
-        retval = dict(View=_("View alignments"),
-                      BoundingBox=_("Bounding box editor"),
-                      ExtractBox=_("Location editor"),
-                      Mask=_("Mask editor"),
-                      Landmarks=_("Landmark point editor"))
+        retval = {"View": _('View alignments'),
+                  "BoundingBox": _('Bounding box editor'),
+                  "ExtractBox": _("Location editor"),
+                  "Mask": _("Mask editor"),
+                  "Landmarks": _("Landmark point editor")}
         for item in retval:
-            retval[item] += " ({})".format(inverse_keybindings[item])
+            retval[item] += f" ({inverse_keybindings[item]})"
         return retval
 
     def _configure_styles(self):
@@ -415,7 +416,7 @@ class ActionsFrame(ttk.Frame):  # pylint:disable=too-many-ancestors
         """
         frame = ttk.Frame(self)
         frame.pack(side=tk.TOP, fill=tk.Y)
-        buttons = dict()
+        buttons = {}
         for action in self.key_bindings.values():
             if action == self._initial_action:
                 btn_style = "actions_selected.TButton"
@@ -467,23 +468,24 @@ class ActionsFrame(ttk.Frame):  # pylint:disable=too-many-ancestors
 
     def _add_static_buttons(self):
         """ Add the buttons to copy alignments from previous and next frames """
-        lookup = dict(copy_prev=(_("Previous"), "C"), copy_next=(_("Next"), "V"), reload=("", "R"))
+        lookup = {"copy_prev": (_("Previous"), "C"),
+                  "copy_next": (_("Next"), "V"),
+                  "reload": ("", "R")}
         frame = ttk.Frame(self)
         frame.pack(side=tk.TOP, fill=tk.Y)
         sep = ttk.Frame(frame, height=2, relief=tk.RIDGE)
         sep.pack(fill=tk.X, pady=5, side=tk.TOP)
-        buttons = dict()
-        tk_frame_index = self._globals.tk_frame_index
+        buttons = {}
         for action in ("copy_prev", "copy_next", "reload"):
             if action == "reload":
                 icon = "reload3"
-                cmd = lambda f=tk_frame_index: self._det_faces.revert_to_saved(f.get())  # noqa
+                cmd = lambda f=self._globals: self._det_faces.revert_to_saved(f.frame_index)  # noqa:E731,E501  # pylint:disable=line-too-long,unnecessary-lambda-assignment
                 helptext = _("Revert to saved Alignments ({})").format(lookup[action][1])
             else:
                 icon = action
                 direction = action.replace("copy_", "")
-                cmd = lambda f=tk_frame_index, d=direction: self._det_faces.update.copy(  # noqa
-                    f.get(), d)
+                cmd = lambda f=self._globals, d=direction: self._det_faces.update.copy(  # noqa:E731,E501  # pylint:disable=line-too-long,unnecessary-lambda-assignment
+                    f.frame_index, d)
                 helptext = _("Copy {} Alignments ({})").format(*lookup[action])
             state = ["!disabled"] if action == "copy_next" else ["disabled"]
             button = ttk.Button(frame,
@@ -494,11 +496,11 @@ class ActionsFrame(ttk.Frame):  # pylint:disable=too-many-ancestors
             button.pack()
             Tooltip(button, text=helptext)
             buttons[action] = button
-        self._globals.tk_frame_index.trace("w", self._disable_enable_copy_buttons)
-        self._globals.tk_update.trace("w", self._disable_enable_reload_button)
+        self._globals.var_frame_index.trace_add("write", self._disable_enable_copy_buttons)
+        self._globals.var_full_update.trace_add("write", self._disable_enable_reload_button)
         return buttons
 
-    def _disable_enable_copy_buttons(self, *args):  # pylint: disable=unused-argument
+    def _disable_enable_copy_buttons(self, *args):  # pylint:disable=unused-argument
         """ Disable or enable the static buttons """
         position = self._globals.frame_index
         face_count_per_index = self._det_faces.face_count_per_index
@@ -506,12 +508,12 @@ class ActionsFrame(ttk.Frame):  # pylint:disable=too-many-ancestors
                                              for count in face_count_per_index[:position])
         next_exists = position != -1 and any(count != 0
                                              for count in face_count_per_index[position + 1:])
-        states = dict(prev=["!disabled"] if prev_exists else ["disabled"],
-                      next=["!disabled"] if next_exists else ["disabled"])
+        states = {"prev": ["!disabled"] if prev_exists else ["disabled"],
+                  "next": ["!disabled"] if next_exists else ["disabled"]}
         for direction in ("prev", "next"):
-            self._static_buttons["copy_{}".format(direction)].state(states[direction])
+            self._static_buttons[f"copy_{direction}"].state(states[direction])
 
-    def _disable_enable_reload_button(self, *args):  # pylint: disable=unused-argument
+    def _disable_enable_reload_button(self, *args):  # pylint:disable=unused-argument
         """ Disable or enable the static buttons """
         position = self._globals.frame_index
         state = ["!disabled"] if (position != -1 and
@@ -549,12 +551,12 @@ class ActionsFrame(ttk.Frame):  # pylint:disable=too-many-ancestors
 
                 helptext = action["helptext"]
                 hotkey = action["hotkey"]
-                helptext += "" if hotkey is None else " ({})".format(hotkey.upper())
+                helptext += "" if hotkey is None else f" ({hotkey.upper()})"
                 Tooltip(button, text=helptext)
                 self._optional_buttons.setdefault(
-                    name, dict())[button] = dict(hotkey=hotkey,
-                                                 group=group,
-                                                 tk_var=action["tk_var"])
+                    name, {})[button] = {"hotkey": hotkey,
+                                         "group": group,
+                                         "tk_var": action["tk_var"]}
             self._optional_buttons[name]["frame"] = frame
         self._display_optional_buttons()
 
@@ -652,9 +654,9 @@ class FrameViewer(tk.Canvas):  # pylint:disable=too-many-ancestors
         self._actions = actions
         self._tk_action_var = tk_action_var
         self._image = BackgroundImage(self)
-        self._editor_globals = dict(control_tk_vars=dict(),
-                                    annotation_formats=dict(),
-                                    key_bindings=dict())
+        self._editor_globals = {"control_tk_vars": {},
+                                "annotation_formats": {},
+                                "key_bindings": {}}
         self._max_face_count = 0
         self._editors = self._get_editors()
         self._add_callbacks()
@@ -695,17 +697,17 @@ class FrameViewer(tk.Canvas):  # pylint:disable=too-many-ancestors
     @property
     def editor_display(self):
         """ dict: List of editors and any additional annotations they should display. """
-        return dict(View=["BoundingBox", "ExtractBox", "Landmarks", "Mesh"],
-                    BoundingBox=["Mesh"],
-                    ExtractBox=["Mesh"],
-                    Landmarks=["ExtractBox", "Mesh"],
-                    Mask=[])
+        return {"View": ["BoundingBox", "ExtractBox", "Landmarks", "Mesh"],
+                "BoundingBox": ["Mesh"],
+                "ExtractBox": ["Mesh"],
+                "Landmarks": ["ExtractBox", "Mesh"],
+                "Mask": []}
 
     @property
     def offset(self):
         """ tuple: The (`width`, `height`) offset of the canvas based on the size of the currently
         displayed image """
-        frame_dims = self._globals.current_frame["display_dims"]
+        frame_dims = self._globals.current_frame.display_dims
         offset_x = (self._globals.frame_display_dims[0] - frame_dims[0]) / 2
         offset_y = (self._globals.frame_display_dims[1] - frame_dims[1]) / 2
         logger.trace("offset_x: %s, offset_y: %s", offset_x, offset_y)
@@ -719,7 +721,7 @@ class FrameViewer(tk.Canvas):  # pylint:disable=too-many-ancestors
         dict
             The {`action`: :class:`Editor`} dictionary of editors for :attr:`_actions` name.
         """
-        editors = dict()
+        editors = {}
         for editor_name in self._actions + ("Mesh", ):
             editor = eval(editor_name)(self,  # pylint:disable=eval-used
                                        self._det_faces)
@@ -731,11 +733,11 @@ class FrameViewer(tk.Canvas):  # pylint:disable=too-many-ancestors
         """ Add the callback trace functions to the :class:`tkinter.Variable` s
 
         Adds callbacks for:
-            :attr:`_globals.tk_update` Update the display for the current image
+            :attr:`_globals.var_full_update` Update the display for the current image
             :attr:`__tk_action_var` Update the mouse display tracking for current action
         """
-        self._globals.tk_update.trace("w", self._update_display)
-        self._tk_action_var.trace("w", self._change_active_editor)
+        self._globals.var_full_update.trace_add("write", self._update_display)
+        self._tk_action_var.trace_add("write", self._change_active_editor)
 
     def _change_active_editor(self, *args):  # pylint:disable=unused-argument
         """ Update the display for the active editor.
@@ -755,7 +757,7 @@ class FrameViewer(tk.Canvas):  # pylint:disable=too-many-ancestors
 
         self.active_editor.bind_mouse_motion()
         self.active_editor.set_mouse_click_actions()
-        self._globals.tk_update.set(True)
+        self._globals.var_full_update.set(True)
 
     def _update_display(self, *args):  # pylint:disable=unused-argument
         """ Update the display on frame cache update
@@ -765,7 +767,7 @@ class FrameViewer(tk.Canvas):  # pylint:disable=too-many-ancestors
         A little hacky, but the editors to display or hide are processed in alphabetical
         order, so that they are always processed in the same order (for tag lowering and raising)
         """
-        if not self._globals.tk_update.get():
+        if not self._globals.var_full_update.get():
             return
         zoomed_centering = self.active_editor.zoomed_centering
         self._image.refresh(self.active_editor.view_mode)
@@ -777,7 +779,7 @@ class FrameViewer(tk.Canvas):  # pylint:disable=too-many-ancestors
         if zoomed_centering != self.active_editor.zoomed_centering:
             # Refresh the image if editor annotation has changed the zoom centering of the image
             self._image.refresh(self.active_editor.view_mode)
-        self._globals.tk_update.set(False)
+        self._globals.var_full_update.set(False)
         self.update_idletasks()
 
     def _hide_additional_faces(self):
@@ -797,7 +799,7 @@ class FrameViewer(tk.Canvas):  # pylint:disable=too-many-ancestors
             self._max_face_count = current_face_count
             return
         for idx in range(current_face_count, self._max_face_count):
-            tag = "face_{}".format(idx)
+            tag = f"face_{idx}"
             if any(self.itemcget(item_id, "state") != "hidden"
                    for item_id in self.find_withtag(tag)):
                 logger.debug("Hiding face tag '%s'", tag)
@@ -821,3 +823,6 @@ class FrameViewer(tk.Canvas):  # pylint:disable=too-many-ancestors
             logger.debug("Binding key '%s' to method %s", key, method)
             self.winfo_toplevel().bind(key, method)
             self.key_bindings[key]["bound_to"] = self.selected_action
+
+
+__all__ = get_module_objects(__name__)

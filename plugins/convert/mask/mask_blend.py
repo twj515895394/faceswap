@@ -1,26 +1,21 @@
 #!/usr/bin/env python3
 """ Plugin to blend the edges of the face between the swap and the original face. """
 import logging
-import sys
-from typing import List, Optional, Tuple
+import typing as T
 
 import cv2
 import numpy as np
 
 from lib.align import BlurMask, DetectedFace
-from lib.config import FaceswapConfig
-from plugins.convert._config import Config
-
-if sys.version_info < (3, 8):
-    from typing_extensions import Literal
-else:
-    from typing import Literal
-
+from lib.logger import parse_class_init
+from lib.utils import get_module_objects
+from plugins.convert import convert_config
+from . import mask_blend_defaults as cfg
 
 logger = logging.getLogger(__name__)
 
 
-class Mask():  # pylint:disable=too-few-public-methods
+class Mask():
     """ Manipulations to perform to the mask that is to be applied to the output of the Faceswap
     model.
 
@@ -35,61 +30,23 @@ class Mask():  # pylint:disable=too-few-public-methods
     configfile: str, Optional
         Optional location of custom configuration ``ini`` file. If ``None`` then use the default
         config location. Default: ``None``
-    config: :class:`lib.config.FaceswapConfig`, Optional
-        Optional pre-loaded :class:`lib.config.FaceswapConfig`. If passed, then this will be used
-        over any configuration on disk. If ``None`` then it is ignored. Default: ``None``
-
     """
     def __init__(self,
                  mask_type: str,
                  output_size: int,
                  coverage_ratio: float,
-                 configfile: Optional[str] = None,
-                 config: Optional[FaceswapConfig] = None) -> None:
-        logger.debug("Initializing %s: (mask_type: '%s', output_size: %s, coverage_ratio: %s, "
-                     "configfile: %s, config: %s)", self.__class__.__name__, mask_type,
-                     coverage_ratio, output_size, configfile, config)
+                 configfile: str | None = None) -> None:
+        logger.debug(parse_class_init(locals()))
         self._mask_type = mask_type
-        self._config = self._set_config(configfile, config)
-        logger.debug("config: %s", self._config)
+        convert_config.load_config(config_file=configfile)
 
         self._coverage_ratio = coverage_ratio
         self._box = self._get_box(output_size)
 
-        erode_types = [f"erosion{f}" for f in ["", "_left", "_top", "_right", "_bottom"]]
-        self._erodes = [self._config.get(erode, 0) / 100 for erode in erode_types]
+        self._erodes = [erode / 100
+                        for erode in [cfg.erosion(), cfg.erosion_left(), cfg.erosion_top(),
+                                      cfg.erosion_right(), cfg.erosion_bottom()]]
         self._do_erode = any(amount != 0 for amount in self._erodes)
-
-    def _set_config(self,
-                    configfile: Optional[str],
-                    config: Optional[FaceswapConfig]) -> dict:
-        """ Set the correct configuration for the plugin based on whether a config file
-        or pre-loaded config has been passed in.
-
-        Parameters
-        ----------
-        configfile: str
-            Location of custom configuration ``ini`` file. If ``None`` then use the
-            default config location
-        config: :class:`lib.config.FaceswapConfig`
-            Pre-loaded :class:`lib.config.FaceswapConfig`. If passed, then this will be
-            used over any configuration on disk. If ``None`` then it is ignored.
-
-        Returns
-        -------
-        dict
-            The configuration in dictionary form for the given from
-            :attr:`lib.config.FaceswapConfig.config_dict`
-        """
-        section = ".".join(self.__module__.split(".")[-2:])
-        if config is None:
-            retval = Config(section, configfile=configfile).config_dict
-        else:
-            config.section = section
-            retval = config.config_dict
-            config.section = None
-        logger.debug("Config: %s", retval)
-        return retval
 
     def _get_box(self, output_size: int) -> np.ndarray:
         """ Apply a gradient overlay to the edge of the swap box to smooth out any hard areas
@@ -112,7 +69,7 @@ class Mask():  # pylint:disable=too-few-public-methods
         edge = (output_size // 32) + 1
         box[edge:-edge, edge:-edge] = 1.0
 
-        if self._config["type"] is not None:
+        if cfg.type() != "none":
             box = BlurMask("gaussian",
                            box,
                            6,
@@ -123,8 +80,8 @@ class Mask():  # pylint:disable=too-few-public-methods
             detected_face: DetectedFace,
             source_offset: np.ndarray,
             target_offset: np.ndarray,
-            centering: Literal["legacy", "face", "head"],
-            predicted_mask: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray]:
+            centering: T.Literal["legacy", "face", "head"],
+            predicted_mask: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
         """ Obtain the requested mask type and perform any defined mask manipulations.
 
         Parameters
@@ -171,8 +128,8 @@ class Mask():  # pylint:disable=too-few-public-methods
 
     def _get_mask(self,
                   detected_face: DetectedFace,
-                  predicted_mask: Optional[np.ndarray],
-                  centering: Literal["legacy", "face", "head"],
+                  predicted_mask: np.ndarray | None,
+                  centering: T.Literal["legacy", "face", "head"],
                   source_offset: np.ndarray,
                   target_offset: np.ndarray) -> np.ndarray:
         """ Return the requested mask with any requested blurring applied.
@@ -219,17 +176,17 @@ class Mask():  # pylint:disable=too-few-public-methods
         :class:`numpy.ndarray`
             The processed predicted mask
         """
-        blur_type = self._config["type"].lower()
-        if blur_type is not None:
+        blur_type = T.cast(T.Literal["gaussian", "normalized", "none"], cfg.type().lower())
+        if blur_type != "none":
             mask = BlurMask(blur_type,
                             mask,
-                            self._config["kernel_size"],
-                            passes=self._config["passes"]).blurred
+                            cfg.kernel_size(),
+                            passes=cfg.passes()).blurred
         return mask
 
     def _get_stored_mask(self,
                          detected_face: DetectedFace,
-                         centering: Literal["legacy", "face", "head"],
+                         centering: T.Literal["legacy", "face", "head"],
                          source_offset: np.ndarray,
                          target_offset: np.ndarray) -> np.ndarray:
         """ get the requested stored mask from the detected face object.
@@ -251,10 +208,12 @@ class Mask():  # pylint:disable=too-few-public-methods
             The mask sized to Faceswap model output with any requested blurring applied.
         """
         mask = detected_face.mask[self._mask_type]
-        mask.set_blur_and_threshold(blur_kernel=self._config["kernel_size"],
-                                    blur_type=self._config["type"],
-                                    blur_passes=self._config["passes"],
-                                    threshold=self._config["threshold"])
+        blur_type = T.cast(T.Literal["gaussian", "normalized"] | None, cfg.type().lower())
+        blur_type = None if blur_type == "none" else blur_type
+        mask.set_blur_and_threshold(blur_kernel=cfg.kernel_size(),
+                                    blur_type=blur_type,
+                                    blur_passes=cfg.passes(),
+                                    threshold=cfg.threshold())
         mask.set_sub_crop(source_offset, target_offset, centering, self._coverage_ratio)
         face_mask = mask.mask
         mask_size = face_mask.shape[0]
@@ -303,7 +262,7 @@ class Mask():  # pylint:disable=too-few-public-methods
 
         return eroded[..., None]
 
-    def _get_erosion_kernels(self, mask: np.ndarray) -> List[np.ndarray]:
+    def _get_erosion_kernels(self, mask: np.ndarray) -> list[np.ndarray]:
         """ Get the erosion kernels for each of the center, left, top right and bottom erosions.
 
         An approximation is made based on the number of positive pixels within the mask to create
@@ -331,3 +290,6 @@ class Mask():  # pylint:disable=too-few-public-methods
             kernels.append(cv2.getStructuringElement(shape, kernel) if size else np.array(0))
         logger.trace("Erosion kernels: %s", [k.shape for k in kernels])  # type: ignore
         return kernels
+
+
+__all__ = get_module_objects(__name__)

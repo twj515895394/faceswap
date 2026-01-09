@@ -1,41 +1,45 @@
 #!/usr/bin python3
 """ Utilities available across all scripts """
+# NOTE: Do not import keras/pytorch in this script, as it is accessed before they should be loaded
 
+from __future__ import annotations
+import inspect
 import json
 import logging
 import os
 import sys
 import tkinter as tk
-import warnings
+import typing as T
 import zipfile
 
+from importlib import import_module
 from multiprocessing import current_process
 from re import finditer
 from socket import timeout as socket_timeout, error as socket_error
 from threading import get_ident
 from time import time
-from typing import cast, Dict, List, Optional, Union, Tuple, TYPE_CHECKING
 from urllib import request, error as urlliberror
 
-import numpy as np
-from tqdm import tqdm
+try:
+    import numpy as np
+    from tqdm import tqdm
+except:  # noqa[E722]  # pylint:disable=bare-except
+    # Importing outside of faceswap environment, these packages should not be required
+    np = None  # type:ignore[assignment]  # pylint:disable=invalid-name
+    tqdm = None  # pylint:disable=invalid-name
 
-if sys.version_info < (3, 8):
-    from typing_extensions import get_args, Literal
-else:
-    from typing import get_args, Literal
-
-if TYPE_CHECKING:
+if T.TYPE_CHECKING:
+    from argparse import Namespace
     from http.client import HTTPResponse
 
 # Global variables
-_image_extensions = [  # pylint:disable=invalid-name
-    ".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff"]
-_video_extensions = [  # pylint:disable=invalid-name
-    ".avi", ".flv", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".webm", ".wmv",
-    ".ts", ".vob"]
-_TF_VERS: Optional[Tuple[int, int]] = None
-ValidBackends = Literal["amd", "nvidia", "cpu", "apple_silicon", "directml", "rocm"]
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+""" str : Full path to the root faceswap folder """
+IMAGE_EXTENSIONS = [".bmp", ".jpeg", ".jpg", ".png", ".tif", ".tiff"]
+VIDEO_EXTENSIONS = [".avi", ".flv", ".mkv", ".mov", ".mp4", ".mpeg", ".mpg", ".webm", ".wmv",
+                    ".ts", ".vob"]
+ValidBackends = T.Literal["nvidia", "cpu", "apple_silicon", "rocm"]
+_FS_BACKEND: ValidBackends | None = None
 
 
 class _Backend():  # pylint:disable=too-few-public-methods
@@ -44,15 +48,13 @@ class _Backend():  # pylint:disable=too-few-public-methods
 
     If file doesn't exist and a variable hasn't been set, create the config file. """
     def __init__(self) -> None:
-        self._backends: Dict[str, ValidBackends] = {"1": "cpu",
-                                                    "2": "directml",
-                                                    "3": "nvidia",
-                                                    "4": "apple_silicon",
-                                                    "5": "rocm",
-                                                    "6": "amd"}
+        self._backends: dict[str, ValidBackends] = {"1": "cpu",
+                                                    "2": "nvidia",
+                                                    "3": "apple_silicon",
+                                                    "4": "rocm"}
         self._valid_backends = list(self._backends.values())
         self._config_file = self._get_config_file()
-        self.backend = self._get_backend()
+        self.backend: ValidBackends = self._get_backend()
 
     @classmethod
     def _get_config_file(cls) -> str:
@@ -63,8 +65,7 @@ class _Backend():  # pylint:disable=too-few-public-methods
         str
             The path to the Faceswap configuration file
         """
-        pypath = os.path.dirname(os.path.realpath(sys.argv[0]))
-        config_file = os.path.join(pypath, "config", ".faceswap")
+        config_file = os.path.join(PROJECT_ROOT, "config", ".faceswap")
         return config_file
 
     def _get_backend(self) -> ValidBackends:
@@ -79,9 +80,9 @@ class _Backend():  # pylint:disable=too-few-public-methods
         """
         # Check if environment variable is set, if so use that
         if "FACESWAP_BACKEND" in os.environ:
-            fs_backend = cast(ValidBackends, os.environ["FACESWAP_BACKEND"].lower())
-            assert fs_backend in get_args(ValidBackends), (
-                f"Faceswap backend must be one of {get_args(ValidBackends)}")
+            fs_backend = T.cast(ValidBackends, os.environ["FACESWAP_BACKEND"].lower())
+            assert fs_backend in T.get_args(ValidBackends), (
+                f"Faceswap backend must be one of {T.get_args(ValidBackends)}")
             print(f"Setting Faceswap backend from environment variable to {fs_backend.upper()}")
             return fs_backend
         # Intercept for sphinx docs build
@@ -129,16 +130,13 @@ class _Backend():  # pylint:disable=too-few-public-methods
         return fs_backend
 
 
-_FS_BACKEND: ValidBackends = _Backend().backend
-
-
 def get_backend() -> ValidBackends:
     """ Get the backend that Faceswap is currently configured to use.
 
     Returns
     -------
     str
-        The backend configuration in use by Faceswap. One of  ["amd", "cpu", "directml", "nvidia",
+        The backend configuration in use by Faceswap. One of  ["cpu", "nvidia", "rocm",
         "apple_silicon"]
 
     Example
@@ -147,6 +145,9 @@ def get_backend() -> ValidBackends:
     >>> get_backend()
     'nvidia'
     """
+    global _FS_BACKEND  # pylint:disable=global-statement
+    if _FS_BACKEND is None:
+        _FS_BACKEND = _Backend().backend
     return _FS_BACKEND
 
 
@@ -155,7 +156,7 @@ def set_backend(backend: str) -> None:
 
     Parameters
     ----------
-    backend: ["amd", "cpu", "directml", "nvidia", "apple_silicon"]
+    backend: ["cpu", "nvidia", "rocm", "apple_silicon"]
         The backend to set faceswap to
 
     Example
@@ -164,30 +165,53 @@ def set_backend(backend: str) -> None:
     >>> set_backend("nvidia")
     """
     global _FS_BACKEND  # pylint:disable=global-statement
-    backend = cast(ValidBackends, backend.lower())
+    backend = T.cast(ValidBackends, backend.lower())
     _FS_BACKEND = backend
 
 
-def get_tf_version() -> Tuple[int, int]:
-    """ Obtain the major. minor version of currently installed Tensorflow.
+_versions: dict[T.Literal["torch", "keras"], tuple[int, int]] = {}
+
+
+def get_torch_version() -> tuple[int, int]:
+    """ Obtain the major. minor version of currently installed PyTorch.
 
     Returns
     -------
     tuple[int, int]
-        A tuple of the form (major, minor) representing the version of TensorFlow that is installed
+        A tuple of the form (major, minor) representing the version of PyTorch that is installed
 
     Example
     -------
-    >>> from lib.utils import get_tf_version
-    >>> get_tf_version()
-    (2, 9)
+    >>> from lib.utils import get_torch_version
+    >>> get_torch_version()
+    (2, 2)
     """
-    global _TF_VERS  # pylint:disable=global-statement
-    if _TF_VERS is None:
-        import tensorflow as tf  # pylint:disable=import-outside-toplevel
-        split = tf.__version__.split(".")[:2]
-        _TF_VERS = (int(split[0]), int(split[1]))
-    return _TF_VERS
+    if "torch" not in _versions:
+        torch = import_module("torch")
+        split = torch.__version__.split(".")[:2]
+        _versions["torch"] = (int(split[0]), int(split[1]))
+    return _versions["torch"]
+
+
+def get_keras_version() -> tuple[int, int]:
+    """ Obtain the major. minor version of currently installed Keras.
+
+    Returns
+    -------
+    tuple[int, int]
+        A tuple of the form (major, minor) representing the version of Keras that is installed
+
+    Example
+    -------
+    >>> from lib.utils import get_torch_version
+    >>> get_torch_version()
+    (2, 2)
+    """
+    if "keras" not in _versions:
+        keras = import_module("keras")
+        split = keras.__version__.split(".")[:2]
+        _versions["keras"] = (int(split[0]), int(split[1]))
+    return _versions["keras"]
 
 
 def get_folder(path: str, make_folder: bool = True) -> str:
@@ -226,7 +250,7 @@ def get_folder(path: str, make_folder: bool = True) -> str:
     return path
 
 
-def get_image_paths(directory: str, extension: Optional[str] = None) -> List[str]:
+def get_image_paths(directory: str, extension: str | None = None) -> list[str]:
     """ Gets the image paths from a given directory.
 
     The function searches for files with the specified extension(s) in the given directory, and
@@ -255,7 +279,7 @@ def get_image_paths(directory: str, extension: Optional[str] = None) -> List[str
     ['/path/to/directory/image1.jpg']
     """
     logger = logging.getLogger(__name__)
-    image_extensions = _image_extensions if extension is None else [extension]
+    image_extensions = IMAGE_EXTENSIONS if extension is None else [extension]
     dir_contents = []
 
     if not os.path.exists(directory):
@@ -275,7 +299,7 @@ def get_image_paths(directory: str, extension: Optional[str] = None) -> List[str
     return dir_contents
 
 
-def get_dpi() -> Optional[float]:
+def get_dpi() -> float | None:
     """ Gets the DPI (dots per inch) of the display screen.
 
     Returns
@@ -299,6 +323,29 @@ def get_dpi() -> Optional[float]:
         return None
 
     return float(dpi)
+
+
+def get_module_objects(module: str) -> list[str]:
+    """ Return a list of all public objects within the given module
+
+    Parameters
+    ----------
+    module : str
+        The module to parse for public objects
+
+    Returns
+    -------
+    list[str]
+        A list of object names that exist within the given module
+
+    Example
+    -------
+    >>> __all__ = get_module_objects(__name__)
+    ["foo", "bar", "baz"]
+    """
+    return [name_ for name_, obj in inspect.getmembers(sys.modules[module])
+            if getattr(obj, "__module__", None) == module
+            and not name_.startswith("_")]
 
 
 def convert_to_secs(*args: int) -> int:
@@ -339,7 +386,7 @@ def convert_to_secs(*args: int) -> int:
     return retval
 
 
-def full_path_split(path: str) -> List[str]:
+def full_path_split(path: str) -> list[str]:
     """ Split a file path into all of its parts.
 
     Parameters
@@ -361,7 +408,7 @@ def full_path_split(path: str) -> List[str]:
     ['relative', 'path', 'to', 'file.txt']]
     """
     logger = logging.getLogger(__name__)
-    allparts: List[str] = []
+    allparts: list[str] = []
     while True:
         parts = os.path.split(path)
         if parts[0] == path:   # sentinel for absolute paths
@@ -378,40 +425,7 @@ def full_path_split(path: str) -> List[str]:
     return allparts
 
 
-def set_system_verbosity(log_level: str):
-    """ Set the verbosity level of tensorflow and suppresses future and deprecation warnings from
-    any modules.
-
-    This function sets the `TF_CPP_MIN_LOG_LEVEL` environment variable to control the verbosity of
-    TensorFlow output, as well as filters certain warning types to be ignored. The log level is
-    determined based on the input string `log_level`.
-
-    Parameters
-    ----------
-    log_level: str
-        The requested Faceswap log level.
-
-    References
-    ----------
-    https://stackoverflow.com/questions/35911252/disable-tensorflow-debugging-information
-
-    Example
-    -------
-    >>> from lib.utils import set_system_verbosity
-    >>> set_system_verbosity('warning')
-    """
-    logger = logging.getLogger(__name__)
-    from lib.logger import get_loglevel  # pylint:disable=import-outside-toplevel
-    numeric_level = get_loglevel(log_level)
-    log_level = "3" if numeric_level > 15 else "0"
-    logger.debug("System Verbosity level: %s", log_level)
-    os.environ['TF_CPP_MIN_LOG_LEVEL'] = log_level
-    if log_level != '0':
-        for warncat in (FutureWarning, DeprecationWarning, UserWarning):
-            warnings.simplefilter(action='ignore', category=warncat)
-
-
-def deprecation_warning(function: str, additional_info: Optional[str] = None) -> None:
+def deprecation_warning(function: str, additional_info: str | None = None) -> None:
     """ Log a deprecation warning message.
 
     This function logs a warning message to indicate that the specified function has been
@@ -437,7 +451,44 @@ def deprecation_warning(function: str, additional_info: Optional[str] = None) ->
     logger.warning(msg)
 
 
-def camel_case_split(identifier: str) -> List[str]:
+def handle_deprecated_cliopts(arguments: Namespace) -> Namespace:
+    """ Handle deprecated command line arguments and update to correct argument.
+
+    Deprecated cli opts will be provided in the following format:
+    `"depr_<option_key>_<deprecated_opt>_<new_opt>"`
+
+    Parameters
+    ----------
+    arguments: :class:`argpares.Namespace`
+        The passed in faceswap cli arguments
+
+    Returns
+    -------
+    :class:`argpares.Namespace`
+        The cli arguments with deprecated values mapped to the correct entry
+    """
+    logger = logging.getLogger(__name__)
+
+    for key, selected in vars(arguments).items():
+        if not key.startswith("depr_") or key.startswith("depr_") and selected is None:
+            continue  # Not a deprecated opt
+        if isinstance(selected, bool) and not selected:
+            continue  # store-true opt with default value
+
+        opt, old, new = key.replace("depr_", "").rsplit("_", maxsplit=2)
+        deprecation_warning(f"Command line option '-{old}'", f"Use '-{new}, --{opt}' instead")
+
+        exist = getattr(arguments, opt)
+        if exist == selected:
+            logger.debug("Keeping existing '%s' value of '%s'", opt, exist)
+        else:
+            logger.debug("Updating arg '%s' from '%s' to '%s' from deprecated opt",
+                         opt, exist, selected)
+
+    return arguments
+
+
+def camel_case_split(identifier: str) -> list[str]:
     """ Split a camelCase string into a list of its individual parts
 
     Parameters
@@ -512,7 +563,7 @@ class FaceswapError(Exception):
     pass  # pylint:disable=unnecessary-pass
 
 
-class GetModel():  # pylint:disable=too-few-public-methods
+class GetModel():
     """ Check for models in the cache path.
 
     If available, return the path, if not available, get, unzip and install model
@@ -542,12 +593,12 @@ class GetModel():  # pylint:disable=too-few-public-methods
     >>> model_downloader = GetModel("s3fd_keras_v2.h5", 11)
     """
 
-    def __init__(self, model_filename: Union[str, List[str]], git_model_id: int) -> None:
+    def __init__(self, model_filename: str | list[str], git_model_id: int) -> None:
         self.logger = logging.getLogger(__name__)
         if not isinstance(model_filename, list):
             model_filename = [model_filename]
         self._model_filename = model_filename
-        self._cache_dir = os.path.join(os.path.abspath(os.path.dirname(sys.argv[0])), ".fs_cache")
+        self._cache_dir = os.path.join(PROJECT_ROOT, ".fs_cache")
         self._git_model_id = git_model_id
         self._url_base = "https://github.com/deepfakes-models/faceswap-models/releases/download"
         self._chunk_size = 1024  # Chunk size for downloading and unzipping
@@ -577,7 +628,7 @@ class GetModel():  # pylint:disable=too-few-public-methods
         return retval
 
     @property
-    def model_path(self) -> Union[str, List[str]]:
+    def model_path(self) -> str | list[str]:
         """ str or list[str]: The model path(s) in the cache folder.
 
         Example
@@ -588,7 +639,7 @@ class GetModel():  # pylint:disable=too-few-public-methods
         '/path/to/s3fd_keras_v2.h5'
         """
         paths = [os.path.join(self._cache_dir, fname) for fname in self._model_filename]
-        retval: Union[str, List[str]] = paths[0] if len(paths) == 1 else paths
+        retval: str | list[str] = paths[0] if len(paths) == 1 else paths
         self.logger.trace(retval)  # type:ignore[attr-defined]
         return retval
 
@@ -663,7 +714,7 @@ class GetModel():  # pylint:disable=too-few-public-methods
                                      self._url_download, self._cache_dir)
                     sys.exit(1)
 
-    def _write_zipfile(self, response: "HTTPResponse", downloaded_size: int) -> None:
+    def _write_zipfile(self, response: HTTPResponse, downloaded_size: int) -> None:
         """ Write the model zip file to disk.
 
         Parameters
@@ -680,6 +731,7 @@ class GetModel():  # pylint:disable=too-few-public-methods
             self.logger.info("Zip already exists. Skipping download")
             return
         write_type = "wb" if downloaded_size == 0 else "ab"
+        assert tqdm is not None
         with open(self._model_zip_path, write_type) as out_file:
             pbar = tqdm(desc="Downloading",
                         unit="B",
@@ -717,6 +769,7 @@ class GetModel():  # pylint:disable=too-few-public-methods
         length = sum(f.file_size for f in zip_file.infolist())
         fnames = zip_file.namelist()
         self.logger.debug("Zipfile: Filenames: %s, Total Size: %s", fnames, length)
+        assert tqdm is not None
         pbar = tqdm(desc="Decompressing",
                     unit="B",
                     total=length,
@@ -763,10 +816,10 @@ class DebugTimes():
     """
     def __init__(self,
                  show_min: bool = True, show_mean: bool = True, show_max: bool = True) -> None:
-        self._times: Dict[str, List[float]] = {}
-        self._steps: Dict[str, float] = {}
+        self._times: dict[str, list[float]] = {}
+        self._steps: dict[str, float] = {}
         self._interval = 1
-        self._display = dict(min=show_min, mean=show_mean, max=show_max)
+        self._display = {"min": show_min, "mean": show_mean, "max": show_max}
 
     def step_start(self, name: str, record: bool = True) -> None:
         """ Start the timer for the given step name.
@@ -877,6 +930,7 @@ class DebugTimes():
         header += f"{self._format_column('Max', time_col)}" if self._display["max"] else ""
         print(header)
         print(separator)
+        assert np is not None
         for key, val in self._times.items():
             num = str(len(val))
             contents = f"{self._format_column(key, name_col)}{self._format_column(num, items_col)}"
@@ -891,3 +945,6 @@ class DebugTimes():
                 contents += f"{self._format_column(_max, time_col)}"
             print(contents)
         self._interval = 1
+
+
+__all__ = get_module_objects(__name__)

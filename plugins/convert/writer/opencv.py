@@ -2,12 +2,14 @@
 """ Image output writer for faceswap.py converter
     Uses cv2 for writing as in testing this was a lot faster than both Pillow and ImageIO
 """
-from typing import List, Tuple
+import typing as T
 
 import cv2
 import numpy as np
 
+from lib.utils import get_module_objects
 from ._base import Output, logger
+from . import opencv_defaults as cfg
 
 
 class Writer(Output):
@@ -23,21 +25,25 @@ class Writer(Output):
     """
     def __init__(self, output_folder: str, **kwargs) -> None:
         super().__init__(output_folder, **kwargs)
-        self._extension = f".{self.config['format']}"
+        self._extension = f".{cfg.format()}"
         self._check_transparency_format()
-        self._separate_mask = self.config["draw_transparent"] and self.config["separate_mask"]
+        self._separate_mask = self.output_alpha and cfg.separate_mask()
         self._args = self._get_save_args()
+
+    @property
+    def output_alpha(self) -> bool:
+        """ bool : OpenCV can output alpha channel. """
+        return cfg.draw_transparent()
 
     def _check_transparency_format(self) -> None:
         """ Make sure that the output format is correct if draw_transparent is selected """
-        transparent = self.config["draw_transparent"]
-        if not transparent or (transparent and self.config["format"] == "png"):
+        if not self.output_alpha or (self.output_alpha and cfg.format() == "png"):
             return
         logger.warning("Draw Transparent selected, but the requested format does not support "
                        "transparency. Changing output format to 'png'")
-        self.config["format"] = "png"
+        cfg.format.set("png")
 
-    def _get_save_args(self) -> Tuple[int, ...]:
+    def _get_save_args(self) -> tuple[int, ...]:
         """ Obtain the save parameters for the file format.
 
         Returns
@@ -45,18 +51,18 @@ class Writer(Output):
         tuple
             The OpenCV specific arguments for the selected file format
          """
-        filetype = self.config["format"]
-        args: Tuple[int, ...] = tuple()
-        if filetype == "jpg" and self.config["jpg_quality"] > 0:
+        filetype = cfg.format()
+        args: tuple[int, ...] = tuple()
+        if filetype == "jpg" and cfg.jpg_quality() > 0:
             args = (cv2.IMWRITE_JPEG_QUALITY,
-                    self.config["jpg_quality"])
-        if filetype == "png" and self.config["png_compress_level"] > -1:
+                    cfg.jpg_quality())
+        if filetype == "png" and cfg.png_compress_level() > -1:
             args = (cv2.IMWRITE_PNG_COMPRESSION,
-                    self.config["png_compress_level"])
+                    cfg.png_compress_level())
         logger.debug(args)
         return args
 
-    def write(self, filename: str, image: List[bytes]) -> None:
+    def write(self, filename: str, image: list[bytes]) -> None:
         """ Write out the pre-encoded image to disk. If separate mask has been selected, write out
         the encoded mask to a sub-folder in the output directory.
 
@@ -69,15 +75,16 @@ class Writer(Output):
             or length 2 (containing the image and mask to write out)
         """
         logger.trace("Outputting: (filename: '%s'", filename)  # type:ignore
-        filenames = self.output_filename(filename, self._separate_mask)
+        filenames = self.get_output_filename(filename, cfg.format(), self._separate_mask)
+        # pylint:disable=duplicate-code
         for fname, img in zip(filenames, image):
             try:
                 with open(fname, "wb") as outfile:
                     outfile.write(img)
-            except Exception as err:  # pylint: disable=broad-except
+            except Exception as err:  # pylint:disable=broad-except
                 logger.error("Failed to save image '%s'. Original Error: %s", filename, err)
 
-    def pre_encode(self, image: np.ndarray) -> List[bytes]:
+    def pre_encode(self, image: np.ndarray, **kwargs) -> list[bytes]:
         """ Pre_encode the image in lib/convert.py threads as it is a LOT quicker.
 
         Parameters
@@ -106,8 +113,11 @@ class Writer(Output):
         retval.insert(0, cv2.imencode(self._extension,
                                       image,
                                       self._args)[1])
-        return retval
+        return T.cast(list[bytes], retval)
 
     def close(self) -> None:
         """ Does nothing as OpenCV writer does not need a close method """
         return
+
+
+__all__ = get_module_objects(__name__)

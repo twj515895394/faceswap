@@ -1,5 +1,6 @@
 #!/usr/bin/python
 """ Logging Functions for Faceswap. """
+# NOTE: Don't import non stdlib packages. This module is accessed by setup.py
 import collections
 import logging
 from logging.handlers import RotatingFileHandler
@@ -7,11 +8,13 @@ import os
 import platform
 import re
 import sys
+import typing as T
 import time
 import traceback
 
 from datetime import datetime
-from typing import Union
+
+from lib.utils import get_module_objects
 
 
 class FaceswapLogger(logging.Logger):
@@ -76,11 +79,11 @@ class ColoredFormatter(logging.Formatter):
     def __init__(self, fmt: str, pad_newlines: bool = False, **kwargs) -> None:
         super().__init__(fmt, **kwargs)
         self._use_color = self._get_color_compatibility()
-        self._level_colors = dict(CRITICAL="\033[31m",  # red
-                                  ERROR="\033[31m",  # red
-                                  WARNING="\033[33m",  # yellow
-                                  INFO="\033[32m",  # green
-                                  VERBOSE="\033[34m")  # blue
+        self._level_colors = {"CRITICAL": "\033[31m",  # red
+                              "ERROR": "\033[31m",  # red
+                              "WARNING": "\033[33m",  # yellow
+                              "INFO": "\033[32m",  # green
+                              "VERBOSE": "\033[34m"}  # blue
         self._default_color = "\033[0m"
         self._newline_padding = self._get_newline_padding(pad_newlines, fmt)
 
@@ -133,7 +136,7 @@ class ColoredFormatter(logging.Formatter):
     def _get_sample_time_string(self) -> int:
         """ Obtain a sample time string and calculate correct padding.
 
-        This may be inaccurate wheb ticking over an integer from single to double digits, but that
+        This may be inaccurate when ticking over an integer from single to double digits, but that
         shouldn't be a huge issue.
 
         Returns
@@ -196,7 +199,6 @@ class FaceswapFormatter(logging.Formatter):
             The formatted log message
         """
         record.message = record.getMessage()
-        record = self._rewrite_warnings(record)
         record = self._lower_external(record)
         # strip newlines
         if record.levelno < 30 and ("\n" in record.message or "\r" in record.message):
@@ -219,37 +221,6 @@ class FaceswapFormatter(logging.Formatter):
                 msg = msg + "\n"
             msg = msg + self.formatStack(record.stack_info)
         return msg
-
-    @classmethod
-    def _rewrite_warnings(cls, record: logging.LogRecord) -> logging.LogRecord:
-        """ Change certain warning messages from WARNING to DEBUG to avoid passing non-important
-        information to output.
-
-        Parameters
-        ----------
-        record: :class:`logging.LogRecord`
-            The log record to check for rewriting
-
-        Returns
-        -------
-        :class:`logging.LogRecord`
-            The log rewritten or untouched record
-
-        """
-        if record.levelno == 30 and record.funcName == "warn" and record.module == "ag_logging":
-            # TF 2.3 in Conda is imported with the wrong gast(0.4 when 0.3.3 should be used). This
-            # causes warnings in autograph. They don't appear to impact performance so de-elevate
-            # warning to debug
-            record.levelno = 10
-            record.levelname = "DEBUG"
-
-        if record.levelno == 30 and (record.funcName == "_tfmw_add_deprecation_warning" or
-                                     record.module in ("deprecation", "deprecation_wrapper")):
-            # Keras Deprecations.
-            record.levelno = 10
-            record.levelname = "DEBUG"
-
-        return record
 
     @classmethod
     def _lower_external(cls, record: logging.LogRecord) -> logging.LogRecord:
@@ -326,6 +297,7 @@ def _set_root_logger(loglevel: int = logging.INFO) -> logging.Logger:
     """
     rootlogger = logging.getLogger()
     rootlogger.setLevel(loglevel)
+    logging.captureWarnings(True)
     return rootlogger
 
 
@@ -412,7 +384,7 @@ def _file_handler(loglevel,
     return handler
 
 
-def _stream_handler(loglevel: int, is_gui: bool) -> Union[logging.StreamHandler, TqdmHandler]:
+def _stream_handler(loglevel: int, is_gui: bool) -> logging.StreamHandler | TqdmHandler:
     """ Add a stream handler for the current Faceswap session. The stream handler will only ever
     output at a maximum of VERBOSE level to avoid spamming the console.
 
@@ -522,7 +494,7 @@ def crash_log() -> str:
     filename = os.path.join(path, datetime.now().strftime("crash_report.%Y.%m.%d.%H%M%S%f.log"))
     freeze_log = [line.encode("utf-8") for line in _DEBUG_BUFFER]
     try:
-        from lib.sysinfo import sysinfo  # pylint:disable=import-outside-toplevel
+        from lib.system.sysinfo import sysinfo  # pylint:disable=import-outside-toplevel
     except Exception:  # pylint:disable=broad-except
         sysinfo = ("\n\nThere was an error importing System Information from lib.sysinfo. This is "
                    f"probably a bug which should be fixed:\n{traceback.format_exc()}")
@@ -531,6 +503,52 @@ def crash_log() -> str:
         outfile.write(original_traceback)
         outfile.write(sysinfo.encode("utf-8"))
     return filename
+
+
+def _process_value(value: T.Any) -> T.Any:
+    """ Process the values from a local dict and return in a loggable format
+
+    Parameters
+    ----------
+    value: Any
+        The dictionary value
+
+    Returns
+    -------
+    Any
+        The original or ammended value
+    """
+    if isinstance(value, (list, tuple, set)) and len(value) > 10:
+        return f'[type: "{type(value).__name__}" len: {len(value)}'
+
+    try:
+        import numpy as np  # pylint:disable=import-outside-toplevel
+    except ImportError:
+        return repr(value)
+
+    if isinstance(value, np.ndarray) and np.prod(value.shape) > 10:
+        return f'[type: "{type(value).__name__}" shape: {value.shape}, dtype: "{value.dtype}"]'
+
+    return repr(value)
+
+
+def parse_class_init(locals_dict: dict[str, T.Any]) -> str:
+    """ Parse a locals dict from a class and return in a format suitable for logging
+    Parameters
+    ----------
+    locals_dict: dict[str, T.Any]
+        A locals() dictionary from a newly initialized class
+
+    Returns
+    -------
+    str
+        The locals information suitable for logging
+    """
+    delimit = {k: _process_value(v)
+               for k, v in locals_dict.items() if k != "self"}
+    dsp = ", ".join(f"{k}={v}" for k, v in delimit.items())
+    dsp = f"({dsp})" if dsp else ""
+    return f"Initializing {locals_dict['self'].__class__.__name__}{dsp}"
 
 
 _OLD_FACTORY = logging.getLogRecordFactory()
@@ -551,3 +569,6 @@ logging.setLoggerClass(FaceswapLogger)
 
 # Stores the last 100 debug messages
 _DEBUG_BUFFER = RollingBuffer(maxlen=100)
+
+
+__all__ = get_module_objects(__name__)

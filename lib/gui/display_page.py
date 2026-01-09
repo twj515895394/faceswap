@@ -6,23 +6,23 @@ import logging
 import tkinter as tk
 from tkinter import ttk
 
+from lib.utils import get_module_objects
+
 from .custom_widgets import Tooltip
 from .utils import get_images
 
-logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+logger = logging.getLogger(__name__)
 
 # LOCALES
 _LANG = gettext.translation("gui.tooltips", localedir="locales", fallback=True)
 _ = _LANG.gettext
 
 
-class DisplayPage(ttk.Frame):  # pylint: disable=too-many-ancestors
+class DisplayPage(ttk.Frame):  # pylint:disable=too-many-ancestors
     """ Parent frame holder for each tab.
         Defines uniform structure for each tab to inherit from """
     def __init__(self, parent, tab_name, helptext):
-        logger.debug("Initializing %s: (tab_name: '%s', helptext: %s)",
-                     self.__class__.__name__, tab_name, helptext)
-        ttk.Frame.__init__(self, parent)
+        super().__init__(parent)
 
         self._parent = parent
         self.running_task = parent.running_task
@@ -41,8 +41,6 @@ class DisplayPage(ttk.Frame):  # pylint: disable=too-many-ancestors
 
         self.pack(fill=tk.BOTH, side=tk.TOP, anchor=tk.NW)
         parent.add(self, text=self.tabname.title())
-
-        logger.debug("Initialized %s", self.__class__.__name__,)
 
     @property
     def _tab_is_active(self):
@@ -145,8 +143,7 @@ class DisplayPage(ttk.Frame):  # pylint: disable=too-many-ancestors
             subnotebook frame """
         logger.debug("Getting subnotebook widgets")
         for child in self.subnotebook.winfo_children():
-            for widget in child.winfo_children():
-                yield widget
+            yield from child.winfo_children()
 
     def subnotebook_get_titles_ids(self):
         """ Return tabs ids and titles """
@@ -163,13 +160,11 @@ class DisplayPage(ttk.Frame):  # pylint: disable=too-many-ancestors
         return self.subnotebook.children[tab_name]
 
 
-class DisplayOptionalPage(DisplayPage):  # pylint: disable=too-many-ancestors
+class DisplayOptionalPage(DisplayPage):  # pylint:disable=too-many-ancestors
     """ Parent Context Sensitive Display Tab """
 
     def __init__(self, parent, tab_name, helptext, wait_time, command=None):
-        logger.debug("%s: OptionalPage args: (wait_time: %s, command: %s)",
-                     self.__class__.__name__, wait_time, command)
-        DisplayPage.__init__(self, parent, tab_name, helptext)
+        super().__init__(parent, tab_name, helptext)
 
         self._waittime = wait_time
         self.command = command
@@ -291,3 +286,6 @@ class DisplayOptionalPage(DisplayPage):  # pylint: disable=too-many-ancestors
         for child in self.winfo_children():
             logger.debug("Destroying child: %s", child)
             child.destroy()
+
+
+__all__ = get_module_objects(__name__)

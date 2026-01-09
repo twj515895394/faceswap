@@ -1,24 +1,26 @@
 #!/usr/bin python3
 """ Pytest unit tests for :mod:`lib.gui.stats.event_reader` """
 # pylint:disable=protected-access
-
+from __future__ import annotations
 import json
 import os
+import typing as T
 
 from shutil import rmtree
 from time import time
-from typing import cast, Iterator
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 import pytest_mock
 
-import tensorflow as tf
-from tensorflow.core.util import event_pb2  # pylint:disable=no-name-in-module
+from tensorboard.compat.proto import event_pb2
 
 from lib.gui.analysis.event_reader import (_Cache, _CacheData, _EventParser,
                                            _LogFiles, EventData, TensorBoardLogs)
+
+if T.TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 def test__logfiles(tmp_path: str):
@@ -295,7 +297,10 @@ class TestTensorBoardLogs:
         tblogs_instance = TensorBoardLogs(tmp_path, False)
 
         def teardown():
-            rmtree(tmp_path)
+            try:
+                rmtree(tmp_path)
+            except PermissionError:
+                pass
 
         request.addfinalizer(teardown)
         return tblogs_instance
@@ -445,8 +450,8 @@ class TestTensorBoardLogs:
         """
         tb_logs = tensorboardlogs_instance
 
-        with pytest.raises(tf.errors.NotFoundError):  # Invalid session id
-            tb_logs.get_loss(3)
+        mocker.patch("lib.gui.analysis.event_reader.RecordIterator")
+        tb_logs.get_loss(3)
 
         check_cache = mocker.patch("lib.gui.analysis.event_reader.TensorBoardLogs._check_cache")
         get_data = mocker.patch("lib.gui.analysis.event_reader._Cache.get_data")
@@ -477,8 +482,9 @@ class TestTensorBoardLogs:
             Mocker for checking _cache_data is called
         """
         tb_logs = tensorboardlogs_instance
-        with pytest.raises(tf.errors.NotFoundError):  # invalid session_id
-            tb_logs.get_timestamps(3)
+        mocker.patch("lib.gui.analysis.event_reader.RecordIterator")
+
+        tb_logs.get_timestamps(3)
 
         check_cache = mocker.patch("lib.gui.analysis.event_reader.TensorBoardLogs._check_cache")
         get_data = mocker.patch("lib.gui.analysis.event_reader._Cache.get_data")
@@ -518,7 +524,7 @@ class Test_EventParser:  # pylint:disable=invalid-name
         serialize: bool, optional
             ``True`` to serialize the event to bytes, ``False`` to return the Event object
         """
-        tags = {0: "keras", 1: "batch_loss", 2: "batch_face_a", 3: "batch_face_b"}
+        tags = {0: "keras", 1: "batch_total", 2: "batch_face_a", 3: "batch_face_b"}
         event = event_pb2.Event(step=step)
         event.summary.value.add(tag=tags[step],  # pylint:disable=no-member
                                 simple_value=loss_value)
@@ -624,13 +630,12 @@ class Test_EventParser:  # pylint:disable=invalid-name
         monkeypatch: :class:`pytest.MonkeyPatch`
             For patching different iterators for testing output
         """
-        monkeypatch.setattr("lib.utils._FS_BACKEND", "cpu")  # We'll test AMD separately
+        monkeypatch.setattr("lib.utils._FS_BACKEND", "cpu")
 
         event_parse = event_parser_instance
-        event_parse._parse_outputs = cast(MagicMock, mocker.MagicMock())  # type:ignore
-        event_parse._add_amd_loss_labels = cast(MagicMock, mocker.MagicMock())  # type:ignore
-        event_parse._process_event = cast(MagicMock, mocker.MagicMock())  # type:ignore
-        event_parse._cache.cache_data = cast(MagicMock, mocker.MagicMock())  # type:ignore
+        event_parse._parse_outputs = T.cast(MagicMock, mocker.MagicMock())  # type:ignore
+        event_parse._process_event = T.cast(MagicMock, mocker.MagicMock())  # type:ignore
+        event_parse._cache.cache_data = T.cast(MagicMock, mocker.MagicMock())  # type:ignore
 
         # keras model
         monkeypatch.setattr(event_parse,
@@ -638,11 +643,9 @@ class Test_EventParser:  # pylint:disable=invalid-name
                             iter([self._create_example_event(0, 1., time())]))
         event_parse.cache_events(1)
         assert event_parse._parse_outputs.called
-        assert not event_parse._add_amd_loss_labels.called
         assert not event_parse._process_event.called
         assert event_parse._cache.cache_data.called
         event_parse._parse_outputs.reset_mock()
-        event_parse._add_amd_loss_labels.reset_mock()
         event_parse._process_event.reset_mock()
         event_parse._cache.cache_data.reset_mock()
 
@@ -652,11 +655,9 @@ class Test_EventParser:  # pylint:disable=invalid-name
                             iter([self._create_example_event(1, 1., time())]))
         event_parse.cache_events(1)
         assert not event_parse._parse_outputs.called
-        assert not event_parse._add_amd_loss_labels.called
         assert event_parse._process_event.called
         assert event_parse._cache.cache_data.called
         event_parse._parse_outputs.reset_mock()
-        event_parse._add_amd_loss_labels.reset_mock()
         event_parse._process_event.reset_mock()
         event_parse._cache.cache_data.reset_mock()
 
@@ -665,24 +666,11 @@ class Test_EventParser:  # pylint:disable=invalid-name
                             "_iterator",
                             iter([event_pb2.Event(step=1).SerializeToString()]))
         assert not event_parse._parse_outputs.called
-        assert not event_parse._add_amd_loss_labels.called
         assert not event_parse._process_event.called
         assert not event_parse._cache.cache_data.called
         event_parse._parse_outputs.reset_mock()
-        event_parse._add_amd_loss_labels.reset_mock()
         event_parse._process_event.reset_mock()
         event_parse._cache.cache_data.reset_mock()
-
-        # AMD + batch item 2
-        monkeypatch.setattr("lib.utils._FS_BACKEND", "amd")
-        monkeypatch.setattr(event_parse,
-                            "_iterator",
-                            iter([self._create_example_event(2, 1., time())]))
-        event_parse.cache_events(1)
-        assert not event_parse._parse_outputs.called
-        assert event_parse._add_amd_loss_labels.called
-        assert event_parse._process_event.called
-        assert event_parse._cache.cache_data.called
 
     def test__parse_outputs(self,
                             event_parser_instance: _EventParser,
@@ -724,38 +712,19 @@ class Test_EventParser:  # pylint:disable=invalid-name
         model_config = {"output_layers": outputs}
 
         expected = np.array([[out] for out in outputs])
-        actual = event_parser_instance._get_outputs(model_config)
+        actual = event_parser_instance._get_outputs(model_config, is_sub_model=False)
         assert isinstance(actual, np.ndarray)
         assert actual.shape == (2, 1, 3)
         np.testing.assert_equal(expected, actual)
 
-    def test__add_amd_loss_labels(self,
-                                  event_parser_instance: _EventParser,
-                                  mocker: pytest_mock.MockerFixture) -> None:
-        """ Test _add_amd_loss_labels works correctly
+        outputs = [["encoder", 1, 0]]
+        model_config = {"output_layers": outputs}
 
-        Parameters
-        ----------
-        event_parser_instance: :class:`lib.gui.analysis.event_reader._EventParser`
-            The class instance to test
-        mocker: :class:`pytest_mock.MockerFixture`
-            Mocker for checking Session data
-        """
-        event_parse = event_parser_instance
-
-        # Already collected
-        assert not event_parse._cache._loss_labels
-        event_parse._cache._loss_labels.extend(["label_a", "label_b"])
-        event_parse._add_amd_loss_labels(1)
-        assert not event_parse._loss_labels
-
-        # New labels
-        event_parse._cache._loss_labels = []
-        mock_session = mocker.patch("lib.gui.analysis.Session")
-        mock_session.get_loss_keys.return_value = ["label_c", "label_d"]
-        assert not event_parse._cache._loss_labels
-        event_parse._add_amd_loss_labels(1)
-        assert event_parse._loss_labels == ["label_c", "label_d"]
+        expected = np.array([outputs])
+        actual = event_parser_instance._get_outputs(model_config, is_sub_model=True)
+        assert isinstance(actual, np.ndarray)
+        assert actual.shape == (1, 1, 3)
+        np.testing.assert_equal(expected, actual)
 
     def test__process_event(self, event_parser_instance: _EventParser) -> None:
         """ Test _process_event works correctly

@@ -10,9 +10,9 @@ It is a good starting point but may need to be refined over time
 import os
 import re
 from subprocess import run
-from typing import List
 
-from ._base import _GPUStats
+from lib.utils import get_module_objects
+from ._base import _GPUStats, _EXCLUDE_DEVICES
 
 _DEVICE_LOOKUP = {  # ref: https://gist.github.com/roalercon/51f13a387f3754615cce
     int("0x130F", 0): "AMD Radeon(TM) R7 Graphics",
@@ -221,7 +221,7 @@ class ROCm(_GPUStats):
     """
     def __init__(self, log: bool = True) -> None:
         self._vendor_id = "0x1002"  # AMD VendorID
-        self._sysfs_paths: List[str] = []
+        self._sysfs_paths: list[str] = []
         super().__init__(log=log)
 
     def _from_sysfs_file(self, path: str) -> str:
@@ -249,7 +249,7 @@ class ROCm(_GPUStats):
             val = ""
         return val
 
-    def _get_sysfs_paths(self) -> List[str]:
+    def _get_sysfs_paths(self) -> list[str]:
         """ Obtain a list of sysfs paths to AMD branded GPUs connected to the system
 
         Returns
@@ -259,7 +259,7 @@ class ROCm(_GPUStats):
         """
         base_dir = "/sys/class/drm/"
 
-        retval: List[str] = []
+        retval: list[str] = []
         if not os.path.exists(base_dir):
             self._log("warning", f"sysfs not found at '{base_dir}'")
             return retval
@@ -347,7 +347,7 @@ class ROCm(_GPUStats):
         self._log("debug", f"GPU Drivers: {retval}")
         return retval
 
-    def _get_device_names(self) -> List[str]:
+    def _get_device_names(self) -> list[str]:
         """ Obtain the list of names of connected GPUs as identified in :attr:`_handles`.
 
         Returns
@@ -383,7 +383,7 @@ class ROCm(_GPUStats):
         self._log("debug", f"Device names: {retval}")
         return retval
 
-    def _get_active_devices(self) -> List[int]:
+    def _get_active_devices(self) -> list[int]:
         """ Obtain the indices of active GPUs (those that have not been explicitly excluded by
         HIP_VISIBLE_DEVICES environment variable or explicitly excluded in the command line
         arguments).
@@ -401,7 +401,7 @@ class ROCm(_GPUStats):
         self._log("debug", f"Active GPU Devices: {devices}")
         return devices
 
-    def _get_vram(self) -> List[int]:
+    def _get_vram(self) -> list[int]:
         """ Obtain the VRAM in Megabytes for each connected AMD GPU as identified in
         :attr:`_handles`.
 
@@ -423,7 +423,7 @@ class ROCm(_GPUStats):
         self._log("debug", f"GPU VRAM: {retval}")
         return retval
 
-    def _get_free_vram(self) -> List[int]:
+    def _get_free_vram(self) -> list[int]:
         """ Obtain the amount of VRAM that is available, in Megabytes, for each connected AMD
         GPU.
 
@@ -449,3 +449,29 @@ class ROCm(_GPUStats):
             retval.append(vram - int(used / (1024 * 1024)))
         self._log("debug", f"GPU VRAM free: {retval}")
         return retval
+
+    def exclude_devices(self, devices: list[int]) -> None:
+        """ Exclude GPU devices from being used by Faceswap. Sets the HIP_VISIBLE_DEVICES
+        environment variable. This must be called before Torch/Keras are imported
+
+        Parameters
+        ----------
+        devices: list[int]
+            The GPU device IDS to be excluded
+        """
+        if not devices:
+            return
+        self._log("debug", f"Excluding GPU indicies: {devices}")
+
+        _EXCLUDE_DEVICES.extend(devices)
+
+        active = self._get_active_devices()
+
+        os.environ["HIP_VISIBLE_DEVICES"] = ",".join(str(d) for d in active
+                                                     if d not in _EXCLUDE_DEVICES)
+
+        env_vars = [f"{k}: {v}" for k, v in os.environ.items() if k.lower().startswith("hip")]
+        self._log("debug", f"HIP environmet variables: {env_vars}")
+
+
+__all__ = get_module_objects(__name__)

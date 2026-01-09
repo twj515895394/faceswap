@@ -3,17 +3,22 @@
     Code adapted and modified from:
     https://github.com/1adrianb/face-alignment
 """
+from __future__ import annotations
 import logging
-from typing import cast, List, TYPE_CHECKING
+import typing as T
 
 import cv2
 import numpy as np
 
-from lib.model.session import KSession
-from ._base import Aligner, AlignerBatch, BatchType
+from keras.saving import load_model
 
-if TYPE_CHECKING:
+from lib.utils import get_module_objects
+from ._base import Aligner, AlignerBatch, BatchType
+from . import fan_defaults as cfg
+
+if T.TYPE_CHECKING:
     from lib.align import DetectedFace
+    from keras import Model
 
 logger = logging.getLogger(__name__)
 
@@ -22,32 +27,30 @@ class Align(Aligner):
     """ Perform transformation to align and get landmarks """
     def __init__(self, **kwargs) -> None:
         git_model_id = 13
-        model_filename = "face-alignment-network_2d4_keras_v2.h5"
+        model_filename = "face-alignment-network_2d4_keras_v3.h5"
         super().__init__(git_model_id=git_model_id, model_filename=model_filename, **kwargs)
-        self.model: KSession
+        self.model: Model
         self.name = "FAN"
         self.input_size = 256
         self.color_format = "RGB"
-        self.vram = 2240
-        self.vram_warnings = 512  # Will run at this with warnings
-        self.vram_per_batch = 64
+        self.vram = 896  # 810 in testing
+        self.vram_per_batch = 768  # ~720 in testing
         self.realign_centering = "head"
-        self.batchsize: int = self.config["batch-size"]
+        self.batchsize: int = cfg.batch_size()
         self.reference_scale = 200. / 195.
 
     def init_model(self) -> None:
         """ Initialize FAN model """
         assert isinstance(self.name, str)
         assert isinstance(self.model_path, str)
-        self.model = KSession(self.name,
-                              self.model_path,
-                              allow_growth=self.config["allow_growth"],
-                              exclude_gpus=self._exclude_gpus)
-        self.model.load_model()
+        logging.disable(logging.WARNING)  # Disable compile warning from Keras
+        self.model = load_model(self.model_path, compile=False)
+        logging.disable(logging.NOTSET)
+        self.model.make_predict_function()
         # Feed a placeholder so Aligner is primed for Manual tool
         placeholder_shape = (self.batchsize, self.input_size, self.input_size, 3)
         placeholder = np.zeros(placeholder_shape, dtype="float32")
-        self.model.predict(placeholder)
+        self.model.predict(placeholder, verbose=False, batch_size=self.batchsize)
 
     def faces_to_feed(self, faces: np.ndarray) -> np.ndarray:
         """ Convert a batch of face images from UINT8 (0-255) to fp32 (0.0-1.0)
@@ -76,10 +79,10 @@ class Align(Aligner):
         logger.trace("Aligning faces around center")  # type:ignore[attr-defined]
         center_scale = self.get_center_scale(batch.detected_faces)
         batch.feed = np.array(self.crop(batch, center_scale))[..., :3]
-        batch.data.append(dict(center_scale=center_scale))
+        batch.data.append({"center_scale": center_scale})
         logger.trace("Aligned image around center")  # type:ignore[attr-defined]
 
-    def get_center_scale(self, detected_faces: List["DetectedFace"]) -> np.ndarray:
+    def get_center_scale(self, detected_faces: list[DetectedFace]) -> np.ndarray:
         """ Get the center and set scale of bounding box
 
         Parameters
@@ -95,11 +98,11 @@ class Align(Aligner):
         logger.trace("Calculating center and scale")  # type:ignore[attr-defined]
         center_scale = np.empty((len(detected_faces), 68, 3), dtype='float32')
         for index, face in enumerate(detected_faces):
-            x_center = (cast(int, face.left) + face.right) / 2.0
-            y_center = (cast(int, face.top) + face.bottom) / 2.0 - cast(int, face.height) * 0.12
-            scale = (cast(int, face.width) + cast(int, face.height)) * self.reference_scale
-            center_scale[index, :, 0] = np.full(68, x_center, dtype='float32')
-            center_scale[index, :, 1] = np.full(68, y_center, dtype='float32')
+            x_ctr = (T.cast(int, face.left) + face.right) / 2.0
+            y_ctr = (T.cast(int, face.top) + face.bottom) / 2.0 - T.cast(int, face.height) * 0.12
+            scale = (T.cast(int, face.width) + T.cast(int, face.height)) * self.reference_scale
+            center_scale[index, :, 0] = np.full(68, x_ctr, dtype='float32')
+            center_scale[index, :, 1] = np.full(68, y_ctr, dtype='float32')
             center_scale[index, :, 2] = np.full(68, scale, dtype='float32')
         logger.trace("Calculated center and scale: %s", center_scale)  # type:ignore[attr-defined]
         return center_scale
@@ -144,7 +147,7 @@ class Align(Aligner):
                           dsize=(self.input_size, self.input_size),
                           interpolation=interp)
 
-    def crop(self, batch: AlignerBatch, center_scale: np.ndarray) -> List[np.ndarray]:
+    def crop(self, batch: AlignerBatch, center_scale: np.ndarray) -> list[np.ndarray]:
         """ Crop image around the center point
 
         Parameters
@@ -220,10 +223,9 @@ class Align(Aligner):
             The predictions from the aligner
         """
         logger.trace("Predicting Landmarks")  # type:ignore[attr-defined]
-        # TODO Remove lazy transpose and change points from predict to use the correct
-        # order
-        retval = self.model.predict(feed)[-1].transpose(0, 3, 1, 2)
-        logger.trace(retval.shape)  # type:ignore[attr-defined]
+        retval = self.model.predict(feed,
+                                    verbose=False,
+                                    batch_size=self.batchsize)[-1].transpose(0, 3, 1, 2)
         return retval
 
     def process_output(self, batch: BatchType) -> None:
@@ -278,3 +280,6 @@ class Align(Aligner):
                                              resolution)
         logger.trace("Obtained points from prediction: %s",  # type:ignore[attr-defined]
                      batch.landmarks)
+
+
+__all__ = get_module_objects(__name__)

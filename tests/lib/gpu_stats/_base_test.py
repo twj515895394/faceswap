@@ -1,30 +1,16 @@
 #!/usr/bin python3
 """ Pytest unit tests for :mod:`lib.gpu_stats._base` """
+import typing as T
+
 from dataclasses import dataclass
-from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
 import pytest_mock
 
 # pylint:disable=protected-access
-from lib.gpu_stats import _base
-from lib.gpu_stats._base import BiggestGPUInfo, GPUInfo, _GPUStats, set_exclude_devices
+from lib.gpu_stats._base import BiggestGPUInfo, GPUInfo, _GPUStats
 from lib.utils import get_backend
-
-
-def test_set_exclude_devices(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ Test that :func:`~lib.gpu_stats._base.set_exclude_devices` adds devices
-
-    Parameters
-    ----------
-    monkeypatch: :class:`pytest.MonkeyPatch`
-        Monkey patching _EXCLUDE_DEVICES
-    """
-    monkeypatch.setattr(_base, "_EXCLUDE_DEVICES", [])
-    assert not _base._EXCLUDE_DEVICES
-    set_exclude_devices([0, 1])
-    assert _base._EXCLUDE_DEVICES == [0, 1]
 
 
 @dataclass
@@ -71,8 +57,8 @@ def test__gpu_stats_init_(gpu_stats_instance: _GPUStats) -> None:
     """
     # Ensure that the object is initialized and shutdown correctly
     assert gpu_stats_instance._is_initialized is False
-    assert cast(MagicMock, gpu_stats_instance._initialize).call_count == 1
-    assert cast(MagicMock, gpu_stats_instance._shutdown).call_count == 1
+    assert T.cast(MagicMock, gpu_stats_instance._initialize).call_count == 1
+    assert T.cast(MagicMock, gpu_stats_instance._shutdown).call_count == 1
 
     # Ensure that the object correctly gets and stores the device count, active devices,
     # handles, driver, device names, and VRAM information
@@ -123,19 +109,6 @@ def test__gpu_stats_get_card_most_free(mocker: pytest_mock.MockerFixture,
                                                             device='No GPU devices found',
                                                             free=2048,
                                                             total=2048)
-
-
-def test__gpu_stats_exclude_all_devices(gpu_stats_instance: _GPUStats) -> None:
-    """ Ensure that the object correctly returns whether all devices are excluded
-
-    Parameters
-    ----------
-    gpu_stats_instance: :class:`_GPUStats`
-        Fixture instance of the _GPUStats base class
-    """
-    assert gpu_stats_instance.exclude_all_devices is False
-    set_exclude_devices([0, 1])
-    assert gpu_stats_instance.exclude_all_devices is True
 
 
 def test__gpu_stats_no_active_devices(

@@ -1,4 +1,5 @@
 #!/bin/bash
+# TODO force conda-forge
 
 TMP_DIR="/tmp/faceswap_install"
 DL_CONDA="https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh"
@@ -12,10 +13,11 @@ DIR_CONDA="$HOME/miniconda3"
 CONDA_EXECUTABLE="${DIR_CONDA}/bin/conda"
 CONDA_TO_PATH=false
 ENV_NAME="faceswap"
-PYENV_VERSION="3.9"
+PYENV_VERSION="3.13"
 
 DIR_FACESWAP="$HOME/faceswap"
 VERSION="nvidia"
+LIB_VERSION="13"
 
 DESKTOP=false
 
@@ -134,13 +136,46 @@ ask_version() {
     # Ask which version of faceswap to install
     while true; do
         default=1
-        read -rp $'\e[36mSelect:\t1: NVIDIA\n\t2: AMD (ROCm)\n\t3: CPU\n\t4: AMD (PlaidML) - deprecated\n'"[default: $default]: "$'\e[97m' vers
+        read -rp $'\e[36mSelect:\t1: NVIDIA\n\t2: AMD (ROCm)\n\t3: CPU\n'"[default: $default]: "$'\e[97m' vers
         vers="${vers:-${default}}"
         case $vers in
             1) VERSION="nvidia" ; break ;;
             2) VERSION="rocm" ; break ;;
             3) VERSION="cpu" ; break ;;
-            4) VERSION="amd" ; PYENV_VERSION="3.8" ; break ;;
+            * ) echo "Invalid selection." ;;
+        esac
+    done
+}
+
+
+ask_cuda_version() {
+    # Ask which Cuda Version to install
+    while true; do
+        default=1
+        read -rp $'\e[36mSelect:\t1: RTX 20xx ->\n\t2: GTX 9xx - GTX 10xx\n\t3: GTX 7xx - GTX 9xx\n'"[default: $default]: "$'\e[97m' vers
+        vers="${vers:-${default}}"
+        case $vers in
+            1) LIB_VERSION="13" ; break ;;
+            2) LIB_VERSION="12" ; break ;;
+            3) LIB_VERSION="11" ; break ;;
+            * ) echo "Invalid selection." ;;
+        esac
+    done
+}
+
+
+ask_rocm_version() {
+    # Ask which Cuda Version to install
+    while true; do
+        default=1
+        read -rp $'\e[36mSelect:\t1: ROCm 6.4\n\t2: ROCm 6.3\n\t3: ROCm 6.2\n\t4: ROCm 6.1\n\t5: ROCm 6.0\n'"[default: $default]: "$'\e[97m' vers
+        vers="${vers:-${default}}"
+        case $vers in
+            1) LIB_VERSION="64" ; break ;;
+            2) LIB_VERSION="63" ; break ;;
+            3) LIB_VERSION="62" ; break ;;
+            4) LIB_VERSION="61" ; break ;;
+            5) LIB_VERSION="60" ; break ;;
             * ) echo "Invalid selection." ;;
         esac
     done
@@ -267,7 +302,7 @@ conda_opts () {
     echo ""
     info "Faceswap will be installed inside a Conda Environment. If an environment already\
     exists with the name specified then it will be deleted."
-    ask "Please specify a name for the Faceswap Conda Environmnet" "ENV_NAME"
+    ask "Please specify a name for the Faceswap Conda Environment" "ENV_NAME"
 }
 
 faceswap_opts () {
@@ -281,12 +316,15 @@ faceswap_opts () {
     latest graphics card drivers installed from the relevant vendor. Please select the version\
     of Faceswap you wish to install."
     ask_version
-    if [ $VERSION == "amd" ] ; then
-        warn "PlaidML support is deprecated and will be removed in a future update. If possible \
-        please consider using the ROCm version"
-        sleep 2
+    if [ $VERSION == "nvidia" ] ; then
+        info "Depending on your GPU a different version of Cuda may be required. Please select the \
+        generation of Nvidia GPU you use below."
+        ask_cuda_version
     fi
     if [ $VERSION == "rocm" ] ; then
+        info "Depending on your installed version of ROCm a different version of PyTorch may be required. \
+        Please select the ROCm version you use below."
+        ask_rocm_version
         warn "ROCm support is experimental. Please make sure that your GPU is supported by ROCm and that \
         ROCm has been installed on your system before proceeding. Installation instructions: \
         https://docs.amd.com/bundle/ROCm_Installation_Guidev5.0/page/Overview_of_ROCm_Installation_Methods.html"
@@ -328,11 +366,11 @@ review() {
     fi
     echo "        - Faceswap will be installed in '$DIR_FACESWAP'"
     echo "        - Installing for '$VERSION'"
-    if [ $VERSION == "amd" ] ; then
-        echo -e "          \e[33m- Note: '$VERSION' is deprecated and will be removed in a\e[97m"
-        echo -e "          \e[33m  future update. Consider using the ROCm version.\e[97m"
+    if [ $VERSION == "nvidia" ] ; then
+        echo "        - Cuda version $LIB_VERSION will be used"
     fi
     if [ $VERSION == "rocm" ] ; then
+        echo "        - ROCm version '$LIB_VERSION' will be used"
         echo -e "          \e[33m- Note: Please ensure that ROCm is supported by your GPU\e[97m"
         echo -e "          \e[33m  and is installed prior to proceeding.\e[97m"
     fi
@@ -348,10 +386,11 @@ conda_install() {
         info "Installing Miniconda3..."
         yellow ; fname="$(basename -- $DL_CONDA)"
         bash "$TMP_DIR/$fname" -b -p "$DIR_CONDA"
+        "$CONDA_EXECUTABLE" tos accept
         if $CONDA_TO_PATH ; then
             info "Adding Miniconda3 to PATH..."
             yellow ; "$CONDA_EXECUTABLE" init
-            "$CONDA_EXECUTABLE" config --set auto_activate_base false
+            "$CONDA_EXECUTABLE" config --set auto_activate false
         fi
     fi
 }
@@ -373,10 +412,10 @@ delete_env() {
 }
 
 create_env() {
-    # Create Python 3.8 env for faceswap
+    # Create Python 3.13 env for faceswap
     delete_env
     info "Creating Conda Virtual Environment..."
-    yellow ; "$CONDA_EXECUTABLE" create -n "$ENV_NAME" -q python="$PYENV_VERSION" -y
+    yellow ; "$CONDA_EXECUTABLE" create -n "$ENV_NAME" -c conda-forge -q python="$PYENV_VERSION" -y
 }
 
 
@@ -390,7 +429,9 @@ activate_env() {
 install_git() {
     # Install git inside conda environment
     info "Installing Git..."
-    yellow ; conda install git -q -y
+    # TODO On linux version 2.45.2 makes the font fixed TK pull in Python from
+    # graalpy, which breaks pretty much everything
+    yellow ; conda install "git<2.45" -q -y
 }
 
 delete_faceswap() {
@@ -411,7 +452,7 @@ clone_faceswap() {
 setup_faceswap() {
     # Run faceswap setup script
     info "Setting up Faceswap..."
-    python -u "$DIR_FACESWAP/setup.py" --installer --$VERSION
+    python -u "$DIR_FACESWAP/setup.py" --installer --$VERSION$LIB_VERSION
 }
 
 create_gui_launcher () {

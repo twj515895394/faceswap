@@ -1,14 +1,22 @@
-""" Auto clipper for clipping gradients.
+""" Auto clipper for clipping gradients. """
+from __future__ import annotations
 
-Non AMD Only
-"""
-from typing import List
+import logging
+import typing as T
 
-import tensorflow as tf
-import tensorflow_probability as tfp
+import numpy as np
+import torch
+
+from lib.logger import parse_class_init
+from lib.utils import get_module_objects
+
+if T.TYPE_CHECKING:
+    from keras import KerasTensor
+
+logger = logging.getLogger(__name__)
 
 
-class AutoClipper():  # pylint:disable=too-few-public-methods
+class AutoClipper():
     """ AutoClip: Adaptive Gradient Clipping for Source Separation Networks
 
     Parameters
@@ -16,58 +24,41 @@ class AutoClipper():  # pylint:disable=too-few-public-methods
     clip_percentile: int
         The percentile to clip the gradients at
     history_size: int, optional
-        The number of iterations of data to use to calculate the norm
-    Default: ``10000``
+        The number of iterations of data to use to calculate the norm Default: ``10000``
 
     References
     ----------
-    tf implementation: https://github.com/pseeth/autoclip
+    Adapted from: https://github.com/pseeth/autoclip
     original paper: https://arxiv.org/abs/2007.14469
     """
-    def __init__(self, clip_percentile: int, history_size: int = 10000):
-        self._clip_percentile = clip_percentile
-        self._grad_history = tf.Variable(tf.zeros(history_size), trainable=False)
-        self._index = tf.Variable(0, trainable=False)
-        self._history_size = history_size
+    def __init__(self, clip_percentile: int, history_size: int = 10000) -> None:
+        logger.debug(parse_class_init(locals()))
 
-    def __call__(self, grads_and_vars: List[tf.Tensor]) -> List[tf.Tensor]:
+        self._clip_percentile = clip_percentile
+        self._history_size = history_size
+        self._grad_history: list[float] = []
+
+        logger.debug("Initialized %s", self.__class__.__name__)
+
+    def __call__(self, gradients: list[KerasTensor]) -> list[KerasTensor]:
         """ Call the AutoClip function.
 
         Parameters
         ----------
-        grads_and_vars: list
-            The list of gradient tensors and variables for the optimizer
-        """
-        grad_norms = [self._get_grad_norm(g) for g, _ in grads_and_vars]
-        total_norm = tf.norm(grad_norms)
-        assign_idx = tf.math.mod(self._index, self._history_size)
-        self._grad_history = self._grad_history[assign_idx].assign(total_norm)
-        self._index = self._index.assign_add(1)
-        clip_value = tfp.stats.percentile(self._grad_history[: self._index],
-                                          q=self._clip_percentile)
-        return [(tf.clip_by_norm(g, clip_value), v) for g, v in grads_and_vars]
-
-    @classmethod
-    def _get_grad_norm(cls, gradients: tf.Tensor) -> tf.Tensor:
-        """ Obtain the L2 Norm for the gradients
-
-        Parameters
-        ----------
-        gradients: :class:`tensorflow.Tensor`
-            The gradients to calculate the L2 norm for
+        gradients: list[:class:`keras.KerasTensor`]
+            The list of gradient tensors for the optimizer
 
         Returns
-        -------
-        :class:`tensorflow.Tensor`
-            The L2 Norm of the given gradients
+        ----------
+        list[:class:`keras.KerasTensor`]
+            The autoclipped gradients
         """
-        values = tf.convert_to_tensor(gradients.values
-                                      if isinstance(gradients, tf.IndexedSlices)
-                                      else gradients, name="t")
+        self._grad_history.append(sum(g.data.norm(2).item() ** 2
+                                      for g in gradients if g is not None) ** (1. / 2))
+        self._grad_history = self._grad_history[-self._history_size:]
+        clip_value = np.percentile(self._grad_history, self._clip_percentile)
+        torch.nn.utils.clip_grad_norm_(gradients, T.cast(float, clip_value))
+        return gradients
 
-        # Calculate L2-norm, clip elements by ratio of clip_norm to L2-norm
-        l2sum = tf.math.reduce_sum(values * values, axis=None, keepdims=True)
-        pred = l2sum > 0
-        # Two-tap tf.where trick to bypass NaN gradients
-        l2sum_safe = tf.where(pred, l2sum, tf.ones_like(l2sum))
-        return tf.squeeze(tf.where(pred, tf.math.sqrt(l2sum_safe), l2sum))
+
+__all__ = get_module_objects(__name__)

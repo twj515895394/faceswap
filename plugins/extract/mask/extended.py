@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
 """ Extended Mask for faceswap.py """
+from __future__ import annotations
 import logging
-from typing import List, Tuple, TYPE_CHECKING
+import typing as T
 
 import cv2
 import numpy as np
+
+from lib.align import LandmarkType
+from lib.utils import get_module_objects
+
 from ._base import BatchType, Masker
 
 logger = logging.getLogger(__name__)
 
-if TYPE_CHECKING:
+if T.TYPE_CHECKING:
     from lib.align.aligned_face import AlignedFace
 
 
 class Mask(Masker):
-    """ Perform transformation to align and get landmarks """
+    """ Apply a landmarks based extended mask """
     def __init__(self, **kwargs):
         git_model_id = None
         model_filename = None
@@ -24,6 +29,7 @@ class Mask(Masker):
         self.vram = 0  # Doesn't use GPU
         self.vram_per_batch = 0
         self.batchsize = 1
+        self.landmark_type = LandmarkType.LM_2D_68
 
     def init_model(self) -> None:
         logger.debug("No mask model to initialize")
@@ -35,14 +41,18 @@ class Mask(Masker):
 
     def predict(self, feed: np.ndarray) -> np.ndarray:
         """ Run model to get predictions """
-        faces: List["AlignedFace"] = feed[1]
+        faces: list[AlignedFace] = feed[1]
         feed = feed[0]
         for mask, face in zip(feed, faces):
+            if LandmarkType.from_shape(face.landmarks.shape) != self.landmark_type:
+                # Called from the manual tool. # TODO This will only work with BS1
+                feed = np.zeros_like(feed)
+                continue
             parts = self.parse_parts(np.array(face.landmarks))
             for item in parts:
-                item = np.rint(np.concatenate(item)).astype("int32")
-                hull = cv2.convexHull(item)
-                cv2.fillConvexPoly(mask, hull, 1.0, lineType=cv2.LINE_AA)
+                a_item = np.rint(np.concatenate(item)).astype("int32")
+                hull = cv2.convexHull(a_item)
+                cv2.fillConvexPoly(mask, hull, [1.0], lineType=cv2.LINE_AA)
         return feed
 
     def process_output(self, batch: BatchType) -> None:
@@ -78,7 +88,7 @@ class Mask(Masker):
         landmarks[17:22] = top_l + ((top_l - bot_l) // 2)
         landmarks[22:27] = top_r + ((top_r - bot_r) // 2)
 
-    def parse_parts(self, landmarks: np.ndarray) -> List[Tuple[np.ndarray, ...]]:
+    def parse_parts(self, landmarks: np.ndarray) -> list[tuple[np.ndarray, ...]]:
         """ Extended face hull mask """
         self._adjust_mask_top(landmarks)
 
@@ -98,3 +108,6 @@ class Mask(Masker):
         nose = (landmarks[27:31], landmarks[31:36])
         parts = [r_jaw, l_jaw, r_cheek, l_cheek, nose_ridge, r_eye, l_eye, nose]
         return parts
+
+
+__all__ = get_module_objects(__name__)

@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """ Collects and returns Information on available Nvidia GPUs. """
 import os
-from typing import List
 
-import pynvml
+import pynvml  # pylint:disable=import-error
 
-from lib.utils import FaceswapError
+from lib.utils import FaceswapError, get_module_objects
 
-from ._base import _GPUStats
+from ._base import _GPUStats, _EXCLUDE_DEVICES
 
 
 class NvidiaStats(_GPUStats):
@@ -54,10 +53,12 @@ class NvidiaStats(_GPUStats):
                    "remove and reinstall your Nvidia drivers before reporting. Original "
                    f"Error: {str(err)}")
             raise FaceswapError(msg) from err
-        except Exception as err:  # pylint: disable=broad-except
+        except Exception as err:  # pylint:disable=broad-except
             msg = ("An unhandled exception occured reading from the Nvidia Machine Learning "
                    f"Library. Original error: {str(err)}")
             raise FaceswapError(msg) from err
+
+        os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
         super()._initialize()
 
     def _shutdown(self) -> None:
@@ -83,7 +84,7 @@ class NvidiaStats(_GPUStats):
         self._log("debug", f"GPU Device count: {retval}")
         return retval
 
-    def _get_active_devices(self) -> List[int]:
+    def _get_active_devices(self) -> list[int]:
         """ Obtain the indices of active GPUs (those that have not been explicitly excluded by
         CUDA_VISIBLE_DEVICES environment variable or explicitly excluded in the command line
         arguments).
@@ -93,6 +94,7 @@ class NvidiaStats(_GPUStats):
         list
             The list of device indices that are available for Faceswap to use
         """
+        # pylint:disable=duplicate-code
         devices = super()._get_active_devices()
         env_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
         if env_devices:
@@ -130,7 +132,7 @@ class NvidiaStats(_GPUStats):
         self._log("debug", f"GPU Driver: {driver}")
         return driver
 
-    def _get_device_names(self) -> List[str]:
+    def _get_device_names(self) -> list[str]:
         """ Obtain the list of names of connected Nvidia GPUs as identified in :attr:`_handles`.
 
         Returns
@@ -143,7 +145,7 @@ class NvidiaStats(_GPUStats):
         self._log("debug", f"GPU Devices: {names}")
         return names
 
-    def _get_vram(self) -> List[int]:
+    def _get_vram(self) -> list[int]:
         """ Obtain the VRAM in Megabytes for each connected Nvidia GPU as identified in
         :attr:`_handles`.
 
@@ -157,7 +159,7 @@ class NvidiaStats(_GPUStats):
         self._log("debug", f"GPU VRAM: {vram}")
         return vram
 
-    def _get_free_vram(self) -> List[int]:
+    def _get_free_vram(self) -> list[int]:
         """ Obtain the amount of VRAM that is available, in Megabytes, for each connected Nvidia
         GPU.
 
@@ -179,3 +181,30 @@ class NvidiaStats(_GPUStats):
 
         self._log("debug", f"GPU VRAM free: {vram}")
         return vram
+
+    def exclude_devices(self, devices: list[int]) -> None:
+        """ Exclude GPU devices from being used by Faceswap. Sets the CUDA_VISIBLE_DEVICES
+        environment variable. This must be called before Torch/Keras are imported
+
+        Parameters
+        ----------
+        devices: list[int]
+            The GPU device IDS to be excluded
+        """
+        # pylint:disable=duplicate-code
+        if not devices:
+            return
+        self._log("debug", f"Excluding GPU indicies: {devices}")
+
+        _EXCLUDE_DEVICES.extend(devices)
+
+        active = self._get_active_devices()
+
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(str(d) for d in active
+                                                      if d not in _EXCLUDE_DEVICES)
+
+        env_vars = [f"{k}: {v}" for k, v in os.environ.items() if k.lower().startswith("cuda")]
+        self._log("debug", f"Cuda environmet variables: {env_vars}")
+
+
+__all__ = get_module_objects(__name__)

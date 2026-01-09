@@ -7,8 +7,11 @@ import tkinter as tk
 from tkinter import messagebox
 
 from lib.serializer import get_serializer
+from lib.gui import gui_config as cfg
+from lib.utils import get_module_objects
 
-logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+
+logger = logging.getLogger(__name__)
 
 
 class _GuiSession():  # pylint:disable=too-few-public-methods
@@ -90,11 +93,12 @@ class _GuiSession():  # pylint:disable=too-few-public-methods
     def _selected_to_choices(self):
         """ dict: The selected value and valid choices for multi-option, radio or combo options.
         """
-        valid_choices = {cmd: {opt: dict(choices=val["cpanel_option"].choices,
-                                         is_multi=val["cpanel_option"].is_multi_option)
+        valid_choices = {cmd: {opt: {"choices": val.cpanel_option.choices,
+                                     "is_multi": val.cpanel_option.is_multi_option}
                                for opt, val in data.items()
-                               if isinstance(val, dict) and "cpanel_option" in val
-                               and val["cpanel_option"].choices is not None}
+                               if hasattr(val, "cpanel_option")  # Filter out helptext
+                               and val.cpanel_option.choices is not None
+                               }
                          for cmd, data in self._config.cli_opts.opts.items()}
         logger.trace("valid_choices: %s", valid_choices)
         retval = {command: {option: {"value": value,
@@ -600,9 +604,9 @@ class Tasks(_GuiSession):
             The tab that pertains to the currently active task
 
         """
-        self._tasks[command] = dict(filename=self._filename,
-                                    options=self._options,
-                                    is_project=self._is_project)
+        self._tasks[command] = {"filename": self._filename,
+                                "options": self._options,
+                                "is_project": self._is_project}
 
     def clear_tasks(self):
         """ Clears all of the stored tasks.
@@ -629,7 +633,7 @@ class Tasks(_GuiSession):
         options: dict
             The options for this task loaded from the project
         """
-        self._tasks[command] = dict(filename=filename, options=options, is_project=True)
+        self._tasks[command] = {"filename": filename, "options": options, "is_project": True}
 
     def _set_active_task(self, command=None):
         """ Set the active :attr:`_filename` and :attr:`_options` to currently selected tab's
@@ -885,7 +889,7 @@ class Project(_GuiSession):
         self.set_default_options()
         self._reset_modified_var()
         self._update_root_title()
-        self._config.set_active_tab_by_name(self._config.user_config_dict["tab"])
+        self._config.set_active_tab_by_name(cfg.tab())
 
     def confirm_close(self):
         """ Pop a message box to get confirmation that an unsaved project should be closed
@@ -925,20 +929,15 @@ class LastSession(_GuiSession):
         if not self._enabled:
             return
 
-        if self._save_option == "prompt":
+        if cfg.autosave_last_session() == "prompt":
             self.ask_load()
-        elif self._save_option == "always":
+        elif cfg.autosave_last_session() == "always":
             self.load()
-
-    @property
-    def _save_option(self):
-        """ str: The user config autosave option. """
-        return self._config.user_config_dict.get("autosave_last_session", "never")
 
     @property
     def _enabled(self):
         """ bool: ``True`` if autosave is enabled otherwise ``False``. """
-        return self._save_option != "never"
+        return cfg.autosave_last_session() != "never"
 
     def from_dict(self, options):
         """ Set the :attr:`_options` property based on the given options dictionary
@@ -1029,3 +1028,6 @@ class LastSession(_GuiSession):
         if opts is not None:
             self._serializer.save(self._filename, opts)
             logger.debug("Saved last session. (filename: '%s', opts: %s", self._filename, opts)
+
+
+__all__ = get_module_objects(__name__)

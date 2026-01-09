@@ -1,9 +1,11 @@
 #!/usr/bin python3
 """ Pytest unit tests for :mod:`tools.preview.viewer` """
+from __future__ import annotations
 import tkinter as tk
+import typing as T
+
 from tkinter import ttk
 
-from typing import cast, TYPE_CHECKING
 from unittest.mock import MagicMock
 
 import pytest
@@ -18,7 +20,7 @@ log_setup("DEBUG", "pytest_viewer.log", "PyTest, False")
 from lib.utils import get_backend  # pylint:disable=wrong-import-position  # noqa
 from tools.preview.viewer import _Faces, FacesDisplay, ImagesCanvas  # pylint:disable=wrong-import-position  # noqa
 
-if TYPE_CHECKING:
+if T.TYPE_CHECKING:
     from lib.align.aligned_face import CenteringType
 
 
@@ -28,13 +30,13 @@ if TYPE_CHECKING:
 def test__faces():
     """ Test the :class:`~tools.preview.viewer._Faces dataclass initializes correctly """
     faces = _Faces()
-    assert faces.filenames == []
-    assert faces.matrix == []
-    assert faces.src == []
-    assert faces.dst == []
+    assert isinstance(faces.filenames, list) and not faces.filenames
+    assert isinstance(faces.matrix, list) and not faces.matrix
+    assert isinstance(faces.src, list) and not faces.src
+    assert isinstance(faces.dst, list) and not faces.dst
 
 
-_PARAMS = [(3, 448), (4, 333), (5, 254), (6, 128)]  # columns/face_size
+_PARAMS = ((3, 448), (4, 333), (5, 254), (6, 128))  # columns/face_size
 _IDS = [f"cols:{c},size:{s}[{get_backend().upper()}]" for c, s in _PARAMS]
 
 
@@ -104,7 +106,7 @@ class TestFacesDisplay():
         """ Test :class:`~tools.preview.viewer.FacesDisplay` set_centering method """
         f_display = self.get_faces_display_instance()
         assert f_display._centering is None
-        centering: "CenteringType" = "legacy"
+        centering: CenteringType = "legacy"
         f_display.set_centering(centering)
         assert f_display._centering == centering
 
@@ -116,6 +118,8 @@ class TestFacesDisplay():
         f_display.set_display_dimensions(dimensions)
         assert f_display._display_dims == dimensions
 
+    # TODO remove the next line that supresses a weird pytest bug when it tears down the tempdir
+    @pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning")
     @pytest.mark.parametrize("columns, face_size", _PARAMS, ids=_IDS)
     def test_update_tk_image(self,
                              columns: int,
@@ -133,13 +137,17 @@ class TestFacesDisplay():
             Mocker for checking _build_faces_image method called
         """
         f_display = self.get_faces_display_instance(columns, face_size)
-        f_display._build_faces_image = cast(MagicMock, mocker.MagicMock())  # type:ignore
-        f_display._get_scale_size = cast(MagicMock,  # type:ignore
-                                         mocker.MagicMock(return_value=(128, 128)))
+        f_display._build_faces_image = T.cast(MagicMock, mocker.MagicMock())  # type:ignore
+        f_display._get_scale_size = T.cast(MagicMock,  # type:ignore
+                                           mocker.MagicMock(return_value=(128, 128)))
         f_display._faces_source = np.zeros((face_size, face_size, 3), dtype=np.uint8)
         f_display._faces_dest = np.zeros((face_size, face_size, 3), dtype=np.uint8)
 
-        tk.Tk()  # tkinter instance needed for image creation
+        try:
+            tk.Tk()  # tkinter instance needed for image creation
+        except tk.TclError:
+            # Some Windows runners arbitrarily don't install Tk correctly
+            pytest.skip("Tk not available on this system")
         f_display.update_tk_image()
 
         f_display._build_faces_image.assert_called_once()
@@ -186,12 +194,12 @@ class TestFacesDisplay():
         header_size = 32
 
         f_display = self.get_faces_display_instance(columns, face_size)
-        f_display._faces_from_frames = cast(MagicMock, mocker.MagicMock())  # type:ignore
-        f_display._header_text = cast(  # type:ignore
+        f_display._faces_from_frames = T.cast(MagicMock, mocker.MagicMock())  # type:ignore
+        f_display._header_text = T.cast(  # type:ignore
             MagicMock,
             mocker.MagicMock(return_value=np.random.rand(header_size, face_size * columns, 3)))
-        f_display._draw_rect = cast(MagicMock,  # type:ignore
-                                    mocker.MagicMock(side_effect=lambda x: x))
+        f_display._draw_rect = T.cast(MagicMock,  # type:ignore
+                                      mocker.MagicMock(side_effect=lambda x: x))
 
         # Test full update
         f_display.update_source = True
@@ -235,8 +243,8 @@ class TestFacesDisplay():
         f_display = self.get_faces_display_instance(columns, face_size)
         f_display.source = [mocker.MagicMock() for _ in range(3)]
         f_display.destination = [np.random.rand(face_size, face_size, 3) for _ in range(3)]
-        f_display._crop_source_faces = cast(MagicMock, mocker.MagicMock())  # type:ignore
-        f_display._crop_destination_faces = cast(MagicMock, mocker.MagicMock())  # type:ignore
+        f_display._crop_source_faces = T.cast(MagicMock, mocker.MagicMock())  # type:ignore
+        f_display._crop_destination_faces = T.cast(MagicMock, mocker.MagicMock())  # type:ignore
 
         # Both src + dst
         f_display.update_source = True
@@ -451,7 +459,7 @@ class TestImagesCanvas:
             Mocker for dummying in tk calls
         """
         event_mock = mocker.MagicMock(spec=tk.Event, width=100, height=200)
-        images_canvas_instance.reload = cast(MagicMock, mocker.MagicMock())  # type:ignore
+        images_canvas_instance.reload = T.cast(MagicMock, mocker.MagicMock())  # type:ignore
 
         images_canvas_instance._resize(event_mock)
 

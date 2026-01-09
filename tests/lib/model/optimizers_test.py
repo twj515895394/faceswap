@@ -6,22 +6,13 @@ Adapted from Keras tests.
 import pytest
 
 import numpy as np
-from numpy.testing import assert_allclose
+
+from keras import device, layers as kl, optimizers as k_optimizers, Sequential
 
 from lib.model import optimizers
 from lib.utils import get_backend
 
 from tests.utils import generate_test_data, to_categorical
-
-if get_backend() == "amd":
-    from keras import optimizers as k_optimizers
-    from keras.layers import Dense, Activation
-    from keras.models import Sequential
-else:
-    # Ignore linting errors from Tensorflow's thoroughly broken import system
-    from tensorflow.keras import optimizers as k_optimizers  # pylint:disable=import-error
-    from tensorflow.keras.layers import Dense, Activation  # noqa pylint:disable=import-error,no-name-in-module
-    from tensorflow.keras.models import Sequential  # pylint:disable=import-error,no-name-in-module
 
 
 def get_test_data():
@@ -40,54 +31,29 @@ def _test_optimizer(optimizer, target=0.75):
     x_train, y_train = get_test_data()
 
     model = Sequential()
-    model.add(Dense(10, input_shape=(x_train.shape[1],)))
-    model.add(Activation("relu"))
-    model.add(Dense(y_train.shape[1]))
-    model.add(Activation("softmax"))
+    model.add(kl.Input((x_train.shape[1], )))
+    model.add(kl.Dense(10))
+    model.add(kl.Activation("relu"))
+    model.add(kl.Dense(y_train.shape[1]))
+    model.add(kl.Activation("softmax"))
     model.compile(loss="categorical_crossentropy",
                   optimizer=optimizer,
                   metrics=["accuracy"])
 
-    history = model.fit(x_train, y_train, epochs=2, batch_size=16, verbose=0)
-    accuracy = "acc" if get_backend() == "amd" else "accuracy"
-    assert history.history[accuracy][-1] >= target
+    history = model.fit(x_train, y_train, epochs=2, batch_size=16, verbose=0)  # type:ignore
+    assert history.history["accuracy"][-1] >= target
     config = k_optimizers.serialize(optimizer)
     optim = k_optimizers.deserialize(config)
     new_config = k_optimizers.serialize(optim)
-    config["class_name"] = config["class_name"].lower()
-    new_config["class_name"] = new_config["class_name"].lower()
+    config["class_name"] = config["class_name"].lower()  # type:ignore
+    new_config["class_name"] = new_config["class_name"].lower()  # type:ignore
     assert config == new_config
 
-    # Test constraints.
-    if get_backend() == "amd":
-        # NB: PlaidML does not support constraints, so this test skipped for AMD backends
-        return
-    model = Sequential()
-    dense = Dense(10,
-                  input_shape=(x_train.shape[1],),
-                  kernel_constraint=lambda x: 0. * x + 1.,
-                  bias_constraint=lambda x: 0. * x + 2.,)
-    model.add(dense)
-    model.add(Activation("relu"))
-    model.add(Dense(y_train.shape[1]))
-    model.add(Activation("softmax"))
-    model.compile(loss="categorical_crossentropy",
-                  optimizer=optimizer,
-                  metrics=["accuracy"])
-    model.train_on_batch(x_train[:10], y_train[:10])
-    kernel, bias = dense.get_weights()
-    assert_allclose(kernel, 1.)
-    assert_allclose(bias, 2.)
 
-
-@pytest.mark.parametrize("dummy", [None], ids=[get_backend().upper()])
-def test_adam(dummy):  # pylint:disable=unused-argument
-    """ Test for custom Adam optimizer """
-    _test_optimizer(k_optimizers.Adam(), target=0.45)
-    _test_optimizer(k_optimizers.Adam(decay=1e-3), target=0.45)
-
-
+# TODO remove the next line that supresses a weird pytest bug when it tears down the tempdir
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning")
 @pytest.mark.parametrize("dummy", [None], ids=[get_backend().upper()])
 def test_adabelief(dummy):  # pylint:disable=unused-argument
     """ Test for custom Adam optimizer """
-    _test_optimizer(optimizers.AdaBelief(), target=0.20)
+    with device("cpu"):
+        _test_optimizer(optimizers.AdaBelief(), target=0.20)

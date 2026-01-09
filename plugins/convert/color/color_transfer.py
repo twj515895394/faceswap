@@ -25,7 +25,9 @@
 
 import cv2
 import numpy as np
+from lib.utils import get_module_objects
 from ._base import Adjustment
+from . import color_transfer_defaults as cfg
 
 
 class Color(Adjustment):
@@ -38,7 +40,7 @@ class Color(Adjustment):
     between Images" paper by Reinhard et al., 2001.
     """
 
-    def process(self, old_face, new_face, raw_mask):
+    def process(self, old_face, new_face, raw_mask):  # pylint:disable=too-many-locals
         """
         Parameters
         ----------
@@ -64,18 +66,18 @@ class Color(Adjustment):
         transfer: NumPy array
             OpenCV image (w, h, 3) NumPy array (uint8)
         """
-        clip = self.config.get("clip", True)
-        preserve_paper = self.config.get("preserve_paper", True)
+        clip = cfg.clip()
+        preserve_paper = cfg.preserve_paper()
 
         # convert the images from the RGB to L*ab* color space, being
         # sure to utilizing the floating point data type (note: OpenCV
         # expects floats to be 32-bit, so use that instead of 64-bit)
-        source = cv2.cvtColor(  # pylint: disable=no-member
+        source = cv2.cvtColor(  # pylint:disable=no-member
             np.rint(old_face * raw_mask * 255.0).astype("uint8"),
-            cv2.COLOR_BGR2LAB).astype("float32")  # pylint: disable=no-member
-        target = cv2.cvtColor(  # pylint: disable=no-member
+            cv2.COLOR_BGR2LAB).astype("float32")  # pylint:disable=no-member
+        target = cv2.cvtColor(  # pylint:disable=no-member
             np.rint(new_face * raw_mask * 255.0).astype("uint8"),
-            cv2.COLOR_BGR2LAB).astype("float32")  # pylint: disable=no-member
+            cv2.COLOR_BGR2LAB).astype("float32")  # pylint:disable=no-member
         # compute color statistics for the source and target images
         (l_mean_src, l_std_src,
          a_mean_src, a_std_src,
@@ -85,7 +87,7 @@ class Color(Adjustment):
          b_mean_tar, b_std_tar) = self.image_stats(target)
 
         # subtract the means from the target image
-        (light, col_a, col_b) = cv2.split(target)  # pylint: disable=no-member
+        (light, col_a, col_b) = cv2.split(target)  # pylint:disable=no-member
         light -= l_mean_tar
         col_a -= a_mean_tar
         col_b -= b_mean_tar
@@ -115,10 +117,10 @@ class Color(Adjustment):
         # merge the channels together and convert back to the RGB color
         # space, being sure to utilize the 8-bit unsigned integer data
         # type
-        transfer = cv2.merge([light, col_a, col_b])  # pylint: disable=no-member
-        transfer = cv2.cvtColor(  # pylint: disable=no-member
+        transfer = cv2.merge([light, col_a, col_b])  # pylint:disable=no-member
+        transfer = cv2.cvtColor(  # pylint:disable=no-member
             transfer.astype("uint8"),
-            cv2.COLOR_LAB2BGR).astype("float32") / 255.0  # pylint: disable=no-member
+            cv2.COLOR_LAB2BGR).astype("float32") / 255.0  # pylint:disable=no-member
         background = new_face * (1 - raw_mask)
         merged = transfer + background
         # return the color transferred image
@@ -139,7 +141,7 @@ class Color(Adjustment):
         channels, respectively
         """
         # compute the mean and standard deviation of each channel
-        (light, col_a, col_b) = cv2.split(image)  # pylint: disable=no-member
+        (light, col_a, col_b) = cv2.split(image)  # pylint:disable=no-member
         (l_mean, l_std) = (light.mean(), light.std())
         (a_mean, a_std) = (col_a.mean(), col_a.std())
         (b_mean, b_std) = (col_b.mean(), col_b.std())
@@ -201,3 +203,6 @@ class Color(Adjustment):
             scaled = self._min_max_scale(arr, new_range=scale_range)
 
         return scaled
+
+
+__all__ = get_module_objects(__name__)

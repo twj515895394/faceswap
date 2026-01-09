@@ -13,7 +13,7 @@ from io import BytesIO
 
 import numpy as np
 
-from lib.utils import FaceswapError
+from lib.utils import FaceswapError, get_module_objects
 
 try:
     import yaml
@@ -21,7 +21,7 @@ try:
 except ImportError:
     _HAS_YAML = False
 
-logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+logger = logging.getLogger(__name__)
 
 
 class Serializer():
@@ -252,13 +252,13 @@ class _CompressedSerializer(Serializer):
 
     def _marshal(self, data):
         """ Pickle and compress data """
-        data = self._child._marshal(data)  # pylint: disable=protected-access
+        data = self._child._marshal(data)  # pylint:disable=protected-access
         return zlib.compress(data)
 
     def _unmarshal(self, data):
         """ Decompress and unpicke data """
         data = zlib.decompress(data)
-        return self._child._unmarshal(data)  # pylint: disable=protected-access
+        return self._child._unmarshal(data)  # pylint:disable=protected-access
 
 
 def get_serializer(serializer):
@@ -278,6 +278,7 @@ def get_serializer(serializer):
     -------
     >>> serializer = get_serializer('json')
     """
+    retval = None
     if serializer.lower() == "npy":
         retval = _NPYSerializer()
     elif serializer.lower() == "compressed":
@@ -339,3 +340,6 @@ def get_serializer_from_filename(filename):
         retval = _JSONSerializer()
     logger.debug(retval)
     return retval
+
+
+__all__ = get_module_objects(__name__)

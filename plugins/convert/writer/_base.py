@@ -4,33 +4,14 @@
 import logging
 import os
 import re
-
-from typing import Any, List, Optional
+import typing as T
 
 import numpy as np
 
-from plugins.convert._config import Config
+from lib.logger import parse_class_init
+from plugins.convert import convert_config
 
-logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
-
-
-def get_config(plugin_name: str, configfile: Optional[str] = None) -> dict:
-    """ Obtain the configuration settings for the writer plugin.
-
-    Parameters
-    ----------
-    plugin_name: str
-        The name of the convert plugin to return configuration settings for
-    configfile: str, optional
-        The full path to a custom configuration ini file. If ``None`` is passed
-        then the file is loaded from the default location. Default: ``None``.
-
-    Returns
-    -------
-    dict
-        The requested configuration dictionary
-    """
-    return Config(plugin_name, configfile=configfile).config_dict
+logger = logging.getLogger(__name__)
 
 
 class Output():
@@ -44,12 +25,9 @@ class Output():
         The full path to a custom configuration ini file. If ``None`` is passed
         then the file is loaded from the default location. Default: ``None``.
     """
-    def __init__(self, output_folder: str, configfile: Optional[str] = None) -> None:
-        logger.debug("Initializing %s: (output_folder: '%s')",
-                     self.__class__.__name__, output_folder)
-        self.config: dict = get_config(".".join(self.__module__.split(".")[-2:]),
-                                       configfile=configfile)
-        logger.debug("config: %s", self.config)
+    def __init__(self, output_folder: str, configfile: str | None = None) -> None:
+        logger.debug(parse_class_init(locals()))
+        convert_config.load_config(config_file=configfile)
         self.output_folder: str = output_folder
 
         # For creating subfolders when separate mask is selected
@@ -66,20 +44,58 @@ class Output():
 
         Writers that write to a stream have a frame_order paramater to dictate
         the order in which frames should be written out (eg. gif/ffmpeg) """
-        retval = hasattr(self, "frame_order")
+        retval = hasattr(self, "_frame_order")
         return retval
 
-    def output_filename(self, filename: str, separate_mask: bool = False) -> List[str]:
-        """ Obtain the full path for the output file, including the correct extension, for the
-        given input filename.
+    @property
+    def output_alpha(self) -> bool:
+        """ bool : Override if the plugin can output an alpha channel and the user configuration
+        option is set to use it. Default ``False`` """
+        return False
 
-        NB: The plugin must have a config item 'format' that contains the file extension to use
-        this method.
+    @classmethod
+    def _set_frame_order(cls,
+                         total_count: int,
+                         frame_ranges: list[tuple[int, int]] | None) -> list[int]:
+        """ Obtain the full list of frames to be converted in order.
+
+        Used for FFMPEG and Gif writers to ensure correct frame order
 
         Parameters
         ----------
-        filename: str
+        total_count: int
+            The total number of frames to be converted
+        frame_ranges: list or ``None``
+            List of tuples for starting and end values of each frame range to be converted or
+            ``None`` if all frames are to be converted
+
+        Returns
+        -------
+        list
+            Full list of all frame indices to be converted
+        """
+        if frame_ranges is None:
+            retval = list(range(1, total_count + 1))
+        else:
+            retval = []
+            for rng in frame_ranges:
+                retval.extend(list(range(rng[0], rng[1] + 1)))
+        logger.debug("frame_order: %s", retval)
+        return retval
+
+    def get_output_filename(self,
+                            filename: str,
+                            extension: str,
+                            separate_mask: bool = False) -> list[str]:
+        """ Obtain the full path for the output file, including the correct extension, for the
+        given input filename.
+
+        Parameters
+        ----------
+        filename : str
             The input frame filename to generate the output file name for
+        extension : str
+            The extension to use for the output file
         separate_mask: bool, optional
             ``True`` if the mask should be saved out to a sub-folder otherwise ``False``
 
@@ -89,8 +105,9 @@ class Output():
             The full path for the output converted frame to be saved to in position 1. The full
             path for the mask to be output to in position 2 (if requested)
         """
+        extension = extension.strip(".")
         filename = os.path.splitext(os.path.basename(filename))[0]
-        out_filename = f"{filename}.{self.config['format']}"
+        out_filename = f"{filename}.{extension}"
         retval = [os.path.join(self.output_folder, out_filename)]
         if separate_mask:
             retval.append(os.path.join(self.output_folder, "masks", out_filename))
@@ -124,7 +141,7 @@ class Output():
         logger.trace("Added to cache. Frame no: %s", frame_no)  # type: ignore
         logger.trace("Current cache: %s", sorted(self.cache.keys()))  # type:ignore
 
-    def write(self, filename: str, image: Any) -> None:
+    def write(self, filename: str, image: T.Any) -> None:
         """ Override for specific frame writing method.
 
         Parameters
@@ -137,7 +154,7 @@ class Output():
         """
         raise NotImplementedError
 
-    def pre_encode(self, image: np.ndarray) -> Any:  # pylint: disable=unused-argument
+    def pre_encode(self, image: np.ndarray, **kwargs) -> T.Any:  # pylint:disable=unused-argument
         """ Some writer plugins support the pre-encoding of images prior to saving out. As
         patching is done in multiple threads, but writing is done in a single thread, it can
         speed up the process to do any pre-encoding as part of the converter process.

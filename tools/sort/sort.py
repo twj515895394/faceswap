@@ -2,31 +2,31 @@
 """
 A tool that allows for sorting and grouping images in different ways.
 """
+from __future__ import annotations
 import logging
 import os
 import sys
-
+import typing as T
 
 from argparse import Namespace
 from shutil import copyfile, rmtree
-from typing import Dict, List, Optional, TYPE_CHECKING
 
 from tqdm import tqdm
 
 # faceswap imports
 from lib.serializer import Serializer, get_serializer_from_filename
-from lib.utils import deprecation_warning
+from lib.utils import get_module_objects, handle_deprecated_cliopts
 
 from .sort_methods import SortBlur, SortColor, SortFace, SortHistogram, SortMultiMethod
 from .sort_methods_aligned import SortDistance, SortFaceCNN, SortPitch, SortSize, SortYaw, SortRoll
 
-if TYPE_CHECKING:
+if T.TYPE_CHECKING:
     from .sort_methods import SortMethod
 
 logger = logging.getLogger(__name__)
 
 
-class Sort():  # pylint:disable=too-few-public-methods
+class Sort():
     """ Sorts folders of faces based on input criteria
 
     Wrapper for the sort process to run in either batch mode or single use mode
@@ -39,33 +39,11 @@ class Sort():  # pylint:disable=too-few-public-methods
     """
     def __init__(self, arguments: Namespace) -> None:
         logger.debug("Initializing: %s (args: %s)", self.__class__.__name__, arguments)
-        self._args = arguments
-        self._handle_deprecations()
+        self._args = handle_deprecated_cliopts(arguments)
         self._input_locations = self._get_input_locations()
         logger.debug("Initialized: %s", self.__class__.__name__)
 
-    def _handle_deprecations(self):
-        """ Warn that 'final_process' is deprecated and remove from arguments """
-        if self._args.final_process:
-            deprecation_warning("`-fp`, `--final-process`", "This option will be ignored")
-            logger.warning("Final processing is dictated by your choice of 'sort-by' and "
-                           "'group-by' options and whether 'keep' has been selected.")
-            del self._args.final_process
-        if "face-yaw" in (self._args.sort_method, self._args.group_method):
-            deprecation_warning("`face-yaw` sort option", "Please use option 'yaw' going forward.")
-            sort_ = self._args.sort_method
-            group_ = self._args.group_method
-            self._args.sort_method = "yaw" if sort_ == "face-yaw" else sort_
-            self._args.group_method = "yaw" if group_ == "face-yaw" else group_
-        if "black-pixels" in (self._args.sort_method, self._args.group_method):
-            deprecation_warning("`black-pixels` sort option",
-                                "Please use option 'color-black' going forward.")
-            sort_ = self._args.sort_method
-            group_ = self._args.group_method
-            self._args.sort_method = "color-black" if sort_ == "black-pixels" else sort_
-            self._args.group_method = "color-black" if group_ == "black-pixels" else group_
-
-    def _get_input_locations(self) -> List[str]:
+    def _get_input_locations(self) -> list[str]:
         """ Obtain the full path to input locations. Will be a list of locations if batch mode is
         selected, or a containing a single location if batch mode is not selected.
 
@@ -123,31 +101,31 @@ class Sort():  # pylint:disable=too-few-public-methods
             sort.process()
 
 
-class _Sort():  # pylint:disable=too-few-public-methods
+class _Sort():
     """ Sorts folders of faces based on input criteria """
     def __init__(self, arguments: Namespace) -> None:
         logger.debug("Initializing %s: arguments: %s", self.__class__.__name__, arguments)
-        self._processes = dict(blur=SortBlur,
-                               blur_fft=SortBlur,
-                               distance=SortDistance,
-                               yaw=SortYaw,
-                               pitch=SortPitch,
-                               roll=SortRoll,
-                               size=SortSize,
-                               face=SortFace,
-                               face_cnn=SortFaceCNN,
-                               face_cnn_dissim=SortFaceCNN,
-                               hist=SortHistogram,
-                               hist_dissim=SortHistogram,
-                               color_black=SortColor,
-                               color_gray=SortColor,
-                               color_luma=SortColor,
-                               color_green=SortColor,
-                               color_orange=SortColor)
+        self._processes = {"blur": SortBlur,
+                           "blur_fft": SortBlur,
+                           "distance": SortDistance,
+                           "yaw": SortYaw,
+                           "pitch": SortPitch,
+                           "roll": SortRoll,
+                           "size": SortSize,
+                           "face": SortFace,
+                           "face_cnn": SortFaceCNN,
+                           "face_cnn_dissim": SortFaceCNN,
+                           "hist": SortHistogram,
+                           "hist_dissim": SortHistogram,
+                           "color_black": SortColor,
+                           "color_gray": SortColor,
+                           "color_luma": SortColor,
+                           "color_green": SortColor,
+                           "color_orange": SortColor}
 
         self._args = self._parse_arguments(arguments)
-        self._changes: Dict[str, str] = {}
-        self.serializer: Optional[Serializer] = None
+        self._changes: dict[str, str] = {}
+        self.serializer: Serializer | None = None
 
         if arguments.log_changes:
             self.serializer = get_serializer_from_filename(arguments.log_file_path)
@@ -220,7 +198,7 @@ class _Sort():  # pylint:disable=too-few-public-methods
         logger.debug("Cleaned arguments: %s", arguments)
         return arguments
 
-    def _get_sorter(self) -> "SortMethod":
+    def _get_sorter(self) -> SortMethod:
         """ Obtain a sorter/grouper combo for the selected sort/group by options
 
         Returns
@@ -351,3 +329,6 @@ class _Sort():  # pylint:disable=too-few-public-methods
             dest = os.path.join(output_dir, f"{idx:06d}_{os.path.basename(source)}")
 
             self._sort_file(source, dest)
+
+
+__all__ = get_module_objects(__name__)

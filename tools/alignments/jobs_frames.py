@@ -1,34 +1,32 @@
 #!/usr/bin/env python3
 """ Tools for manipulating the alignments using Frames as a source """
+from __future__ import annotations
 import logging
 import os
 import sys
+import typing as T
+
 from datetime import datetime
-from typing import cast, Dict, List, Optional, Tuple, TYPE_CHECKING, Union
 
 import cv2
 import numpy as np
 from tqdm import tqdm
 
-from lib.align import DetectedFace, _EXTRACT_RATIOS
+from lib.align import DetectedFace, EXTRACT_RATIOS, LANDMARK_PARTS, LandmarkType
 from lib.align.alignments import _VERSION, PNGHeaderDict
 from lib.image import encode_image, generate_thumbnail, ImagesSaver
-from plugins.extract.pipeline import Extractor, ExtractMedia
+from lib.utils import get_module_objects
+from plugins.extract import ExtractMedia, Extractor
 from .media import ExtractedFaces, Frames
 
-if sys.version_info < (3, 8):
-    from typing_extensions import get_args, Literal
-else:
-    from typing import get_args, Literal
-
-if TYPE_CHECKING:
+if T.TYPE_CHECKING:
     from argparse import Namespace
     from .media import AlignmentData
 
 logger = logging.getLogger(__name__)
 
 
-class Draw():  # pylint:disable=too-few-public-methods
+class Draw():
     """ Draws annotations onto original frames and saves into a sub-folder next to the original
     frames.
 
@@ -39,19 +37,11 @@ class Draw():  # pylint:disable=too-few-public-methods
     arguments: :class:`argparse.Namespace`
         The command line arguments that have called this job
     """
-    def __init__(self, alignments: "AlignmentData", arguments: "Namespace") -> None:
+    def __init__(self, alignments: AlignmentData, arguments: Namespace) -> None:
         logger.debug("Initializing %s: (arguments: %s)", self.__class__.__name__, arguments)
         self._alignments = alignments
         self._frames = Frames(arguments.frames_dir)
         self._output_folder = self._set_output()
-        self._mesh_areas = dict(mouth=(48, 68),
-                                right_eyebrow=(17, 22),
-                                left_eyebrow=(22, 27),
-                                right_eye=(36, 42),
-                                left_eye=(42, 48),
-                                nose=(27, 36),
-                                jaw=(0, 17),
-                                chin=(8, 11))
         logger.debug("Initialized %s", self.__class__.__name__)
 
     def _set_output(self) -> str:
@@ -107,6 +97,8 @@ class Draw():  # pylint:disable=too-few-public-methods
             face = DetectedFace()
             face.from_alignment(alignment, image=image)
             # Bounding Box
+            assert face.left is not None
+            assert face.top is not None
             cv2.rectangle(image, (face.left, face.top), (face.right, face.bottom), (255, 0, 0), 1)
             self._annotate_landmarks(image, np.rint(face.landmarks_xy).astype("int32"))
             self._annotate_extract_boxes(image, face, idx)
@@ -122,12 +114,11 @@ class Draw():  # pylint:disable=too-few-public-methods
         image: :class:`numpy.ndarray`
             The frame that extract boxes are to be annotated on to
         landmarks: :class:`numpy.ndarray`
-            The 68 point landmarks that are to be annotated onto the frame
+            The facial landmarks that are to be annotated onto the frame
         """
         # Mesh
-        for area, indices in self._mesh_areas.items():
-            fill = area in ("right_eye", "left_eye", "mouth")
-            cv2.polylines(image, [landmarks[indices[0]:indices[1]]], fill, (255, 255, 0), 1)
+        for start, end, fill in LANDMARK_PARTS[LandmarkType.from_shape(landmarks.shape)].values():
+            cv2.polylines(image, [landmarks[start:end]], fill, (255, 255, 0), 1)
         # Landmarks
         for (pos_x, pos_y) in landmarks:
             cv2.circle(image, (pos_x, pos_y), 1, (0, 255, 255), -1)
@@ -145,7 +136,7 @@ class Draw():  # pylint:disable=too-few-public-methods
         index: int
             The face index for the given face
         """
-        for area in get_args(Literal["face", "head"]):
+        for area in T.get_args(T.Literal["face", "head"]):
             face.load_aligned(image, centering=area, force=True)
             color = (0, 255, 0) if area == "face" else (0, 0, 255)
             top_left = face.aligned.original_roi[0]
@@ -174,7 +165,7 @@ class Draw():  # pylint:disable=too-few-public-methods
         cv2.line(image, tuple(center), tuple(points[2]), (0, 0, 255), 2)
 
 
-class Extract():  # pylint:disable=too-few-public-methods
+class Extract():
     """ Re-extract faces from source frames based on Alignment data
 
     Parameters
@@ -184,12 +175,12 @@ class Extract():  # pylint:disable=too-few-public-methods
     arguments: :class:`argparse.Namespace`
         The :mod:`argparse` arguments as passed in from :mod:`tools.py`
     """
-    def __init__(self, alignments: "AlignmentData", arguments: "Namespace") -> None:
+    def __init__(self, alignments: AlignmentData, arguments: Namespace) -> None:
         logger.debug("Initializing %s: (arguments: %s)", self.__class__.__name__, arguments)
         self._arguments = arguments
         self._alignments = alignments
         self._is_legacy = self._alignments.version == 1.0  # pylint:disable=protected-access
-        self._mask_pipeline: Optional[Extractor] = None
+        self._mask_pipeline: Extractor | None = None
         self._faces_dir = arguments.faces_dir
         self._min_size = self._get_min_size(arguments.size, arguments.min_size)
 
@@ -197,7 +188,7 @@ class Extract():  # pylint:disable=too-few-public-methods
         self._extracted_faces = ExtractedFaces(self._frames,
                                                self._alignments,
                                                size=arguments.size)
-        self._saver: Optional[ImagesSaver] = None
+        self._saver: ImagesSaver | None = None
         logger.debug("Initialized %s", self.__class__.__name__)
 
     @classmethod
@@ -223,7 +214,7 @@ class Extract():  # pylint:disable=too-few-public-methods
                      extract_size, min_size, retval)
         return retval
 
-    def _get_count(self) -> Optional[int]:
+    def _get_count(self) -> int | None:
         """ If the alignments file has been run through the manual tool, then it will hold video
         meta information, meaning that the count of frames in the alignment file can be relied
         on to be accurate.
@@ -237,8 +228,7 @@ class Extract():  # pylint:disable=too-few-public-methods
         meta = self._alignments.video_meta_data
         has_meta = all(val is not None for val in meta.values())
         if has_meta:
-            retval: Optional[int] = len(cast(Dict[str, Union[List[int], List[float]]],
-                                        meta["pts_time"]))
+            retval: int | None = len(T.cast(dict[str, list[int] | list[float]], meta["pts_time"]))
         else:
             retval = None
         logger.debug("Frame count from alignments file: (has_meta: %s, %s", has_meta, retval)
@@ -320,7 +310,7 @@ class Extract():  # pylint:disable=too-few-public-methods
             self._alignments.save()
         logger.info("%s face(s) extracted", extracted_faces)
 
-    def _set_skip_list(self) -> Optional[List[int]]:
+    def _set_skip_list(self) -> list[int] | None:
         """ Set the indices for frames that should be skipped based on the `extract_every_n`
         command line option.
 
@@ -335,7 +325,7 @@ class Extract():  # pylint:disable=too-few-public-methods
             logger.debug("Not skipping any frames")
             return None
         skip_list = []
-        for idx, item in enumerate(cast(List[Dict[str, str]], self._frames.file_list_sorted)):
+        for idx, item in enumerate(T.cast(list[dict[str, str]], self._frames.file_list_sorted)):
             if idx % skip_num != 0:
                 logger.trace("Adding image '%s' to skip list due to "  # type:ignore
                              "extract_every_n = %s", item["frame_fullname"], skip_num)
@@ -370,14 +360,14 @@ class Extract():  # pylint:disable=too-few-public-methods
 
         for idx, face in enumerate(faces):
             output = f"{frame_name}_{idx}.png"
-            meta: PNGHeaderDict = dict(
-                alignments=face.to_png_meta(),
-                source=dict(alignments_version=self._alignments.version,
-                            original_filename=output,
-                            face_index=idx,
-                            source_filename=filename,
-                            source_is_video=self._frames.is_video,
-                            source_frame_dims=cast(Tuple[int, int], image.shape[:2])))
+            meta: PNGHeaderDict = {
+                "alignments": face.to_png_meta(),
+                "source": {"alignments_version": self._alignments.version,
+                           "original_filename": output,
+                           "face_index": idx,
+                           "source_filename": filename,
+                           "source_is_video": self._frames.is_video,
+                           "source_frame_dims": T.cast(tuple[int, int], image.shape[:2])}}
             assert face.aligned.face is not None
             self._saver.save(output, encode_image(face.aligned.face, ".png", metadata=meta))
             if self._min_size == 0 and self._is_legacy:
@@ -387,7 +377,7 @@ class Extract():  # pylint:disable=too-few-public-methods
         self._saver.close()
         return face_count
 
-    def _select_valid_faces(self, frame: str, image: np.ndarray) -> List[DetectedFace]:
+    def _select_valid_faces(self, frame: str, image: np.ndarray) -> list[DetectedFace]:
         """ Return the aligned faces from a frame that meet the selection criteria,
 
         Parameters
@@ -416,7 +406,7 @@ class Extract():  # pylint:disable=too-few-public-methods
     def _process_legacy(self,
                         filename: str,
                         image: np.ndarray,
-                        detected_faces: List[DetectedFace]) -> List[DetectedFace]:
+                        detected_faces: list[DetectedFace]) -> list[DetectedFace]:
         """ Process legacy face extractions to new extraction method.
 
         Updates stored masks to new extract size
@@ -464,9 +454,9 @@ class Extract():  # pylint:disable=too-few-public-methods
                 continue
             old_mask = mask.mask.astype("float32") / 255.0
             size = old_mask.shape[0]
-            new_size = int(size + (size * _EXTRACT_RATIOS["face"]) / 2)
+            new_size = int(size + (size * EXTRACT_RATIOS["face"]) / 2)
 
-            shift = np.rint(offset * (size - (size * _EXTRACT_RATIOS["face"]))).astype("int32")
+            shift = np.rint(offset * (size - (size * EXTRACT_RATIOS["face"]))).astype("int32")
             pos = np.array([(new_size // 2 - size // 2) - shift[1],
                             (new_size // 2) + (size // 2) - shift[1],
                             (new_size // 2 - size // 2) - shift[0],
@@ -485,3 +475,6 @@ class Extract():  # pylint:disable=too-few-public-methods
             # Get the affine matrix from recently generated components mask
             # pylint:disable=protected-access
             mask._affine_matrix = detected_face.mask["components"].affine_matrix
+
+
+__all__ = get_module_objects(__name__)

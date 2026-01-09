@@ -5,17 +5,20 @@ import logging
 import platform
 import re
 import sys
+import typing as T
 import tkinter as tk
 from tkinter import ttk, TclError
 
 import numpy as np
 
+from lib.utils import get_module_objects
+
 from .utils import get_config
 
-logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+logger = logging.getLogger(__name__)
 
 
-class ContextMenu(tk.Menu):  # pylint: disable=too-many-ancestors
+class ContextMenu(tk.Menu):  # pylint:disable=too-many-ancestors
     """ A Pop up menu to be triggered when right clicking on widgets that this menu has been
     applied to.
 
@@ -71,7 +74,7 @@ class ContextMenu(tk.Menu):  # pylint: disable=too-many-ancestors
             self._widget.select_range(0, tk.END)
 
 
-class RightClickMenu(tk.Menu):  # pylint: disable=too-many-ancestors
+class RightClickMenu(tk.Menu):  # pylint:disable=too-many-ancestors
     """ A Pop up menu that can be bound to a right click mouse event to bring up a context menu
 
     Parameters
@@ -101,7 +104,7 @@ class RightClickMenu(tk.Menu):  # pylint: disable=too-many-ancestors
     def _create_menu(self):
         """ Create the menu based on :attr:`_labels` and :attr:`_actions`. """
         for idx, (label, action) in enumerate(zip(self._labels, self._actions)):
-            kwargs = dict(label=label, command=action)
+            kwargs = {"label": label, "command": action}
             if isinstance(self._hotkeys, (list, tuple)) and self._hotkeys[idx]:
                 kwargs["accelerator"] = self._hotkeys[idx]
             self.add_command(**kwargs)
@@ -117,7 +120,7 @@ class RightClickMenu(tk.Menu):  # pylint: disable=too-many-ancestors
         self.tk_popup(event.x_root, event.y_root)
 
 
-class ConsoleOut(ttk.Frame):  # pylint: disable=too-many-ancestors
+class ConsoleOut(ttk.Frame):  # pylint:disable=too-many-ancestors
     """ The Console out section of the GUI.
 
     A Read only text box for displaying the output from stdout/stderr.
@@ -194,7 +197,7 @@ class ConsoleOut(ttk.Frame):  # pylint: disable=too-many-ancestors
             sys.stderr = _SysOutRouter(self._console, "stderr")
         logger.debug("Redirected console")
 
-    def _clear(self, *args):  # pylint: disable=unused-argument
+    def _clear(self, *args):  # pylint:disable=unused-argument
         """ Clear the console output screen """
         logger.debug("Clear console")
         if not self._console_clear.get():
@@ -205,7 +208,7 @@ class ConsoleOut(ttk.Frame):  # pylint: disable=too-many-ancestors
         logger.debug("Cleared console")
 
 
-class _ReadOnlyText(tk.Text):  # pylint: disable=too-many-ancestors
+class _ReadOnlyText(tk.Text):  # pylint:disable=too-many-ancestors
     """ A read only text widget.
 
     Standard tkinter Text widgets are read/write by default. As we want to make the console
@@ -416,7 +419,7 @@ class _OriginalCommand:
         return self.tk_call(self.orig_and_operation + args)
 
 
-class StatusBar(ttk.Frame):  # pylint: disable=too-many-ancestors
+class StatusBar(ttk.Frame):  # pylint:disable=too-many-ancestors
     """ Status Bar for displaying the Status Message and  Progress Bar at the bottom of the GUI.
 
     Parameters
@@ -428,12 +431,13 @@ class StatusBar(ttk.Frame):  # pylint: disable=too-many-ancestors
         frame otherwise ``False``. Default: ``False``
     """
 
-    def __init__(self, parent, hide_status=False):
+    def __init__(self, parent: ttk.Frame, hide_status: bool = False) -> None:
         super().__init__(parent)
         self._frame = ttk.Frame(self)
         self._message = tk.StringVar()
         self._pbar_message = tk.StringVar()
         self._pbar_position = tk.IntVar()
+        self._mode: T.Literal["indeterminate", "determinate"] = "determinate"
 
         self._message.set("Ready")
 
@@ -443,12 +447,12 @@ class StatusBar(ttk.Frame):  # pylint: disable=too-many-ancestors
         self._frame.pack(padx=10, pady=2, fill=tk.X, expand=False)
 
     @property
-    def message(self):
+    def message(self) -> tk.StringVar:
         """:class:`tkinter.StringVar`: The variable to hold the status bar message on the left
         hand side of the status bar. """
         return self._message
 
-    def _status(self, hide_status):
+    def _status(self, hide_status: bool) -> None:
         """ Place Status label into left of the status bar.
 
         Parameters
@@ -472,8 +476,14 @@ class StatusBar(ttk.Frame):  # pylint: disable=too-many-ancestors
                               anchor=tk.W)
         lblstatus.pack(side=tk.LEFT, anchor=tk.W, fill=tk.X, expand=True)
 
-    def _progress_bar(self):
-        """ Place progress bar into right of the status bar. """
+    def _progress_bar(self) -> ttk.Progressbar:
+        """ Place progress bar into right of the status bar.
+
+        Returns
+        -------
+        :class:`tkinter.ttk.Progressbar`
+            The progress bar object
+        """
         progressframe = ttk.Frame(self._frame)
         progressframe.pack(side=tk.RIGHT, anchor=tk.E, fill=tk.X)
 
@@ -484,12 +494,12 @@ class StatusBar(ttk.Frame):  # pylint: disable=too-many-ancestors
                                length=200,
                                variable=self._pbar_position,
                                maximum=100,
-                               mode="determinate")
+                               mode=self._mode)
         pbar.pack(side=tk.LEFT, padx=2, fill=tk.X, expand=True)
         pbar.pack_forget()
         return pbar
 
-    def start(self, mode):
+    def start(self, mode: T.Literal["indeterminate", "determinate"]) -> None:
         """ Set progress bar mode and display,
 
         Parameters
@@ -500,16 +510,24 @@ class StatusBar(ttk.Frame):  # pylint: disable=too-many-ancestors
         self._set_mode(mode)
         self._pbar.pack()
 
-    def stop(self):
+    def stop(self) -> None:
         """ Reset progress bar and hide """
         self._pbar_message.set("")
         self._pbar_position.set(0)
-        self._set_mode("determinate")
+        self._mode = "determinate"
+        self._set_mode(self._mode)
         self._pbar.pack_forget()
 
-    def _set_mode(self, mode):
-        """ Set the progress bar mode """
-        self._pbar.config(mode=mode)
+    def _set_mode(self, mode: T.Literal["indeterminate", "determinate"]) -> None:
+        """ Set the progress bar mode
+
+        Parameters
+        ----------
+        mode: ["indeterminate", "determinate"]
+            The mode that the progress bar should be executed in
+        """
+        self._mode = mode
+        self._pbar.config(mode=self._mode)
         if mode == "indeterminate":
             self._pbar.config(maximum=100)
             self._pbar.start()
@@ -517,7 +535,23 @@ class StatusBar(ttk.Frame):  # pylint: disable=too-many-ancestors
             self._pbar.stop()
             self._pbar.config(maximum=100)
 
-    def progress_update(self, message, position, update_position=True):
+    def set_mode(self, mode: T.Literal["indeterminate", "determinate"]) -> None:
+        """ Set the mode of a currently displayed progress bar and reset position to 0.
+
+        If the given mode is the same as the currently configured mode, returns without performing
+        any action.
+
+        Parameters
+        ----------
+        mode: ["indeterminate", "determinate"]
+            The mode that the progress bar should be set to
+        """
+        if mode == self._mode:
+            return
+        self.stop()
+        self.start(mode)
+
+    def progress_update(self, message: str, position: int, update_position: bool = True) -> None:
         """ Update the GUIs progress bar and position.
 
         Parameters
@@ -604,7 +638,7 @@ class Tooltip:  # pylint:disable=too-few-public-methods
 
     def _show(self):
         """ Show the tooltip """
-        def tip_pos_calculator(widget, label,
+        def tip_pos_calculator(widget, label,  # pylint:disable=too-many-locals
                                *,
                                tip_delta=(10, 5), pad=(5, 3, 5, 3)):
             """ Calculate the tooltip position """
@@ -693,7 +727,7 @@ class Tooltip:  # pylint:disable=too-few-public-methods
         self._topwidget = None
 
 
-class MultiOption(ttk.Checkbutton):  # pylint: disable=too-many-ancestors
+class MultiOption(ttk.Checkbutton):  # pylint:disable=too-many-ancestors
     """ Similar to the standard :class:`ttk.Radio` widget, but with the ability to select
     multiple pre-defined options. Selected options are generated as `nargs` for the argument
     parser to consume.
@@ -735,7 +769,7 @@ class MultiOption(ttk.Checkbutton):  # pylint: disable=too-many-ancestors
         logger.trace(retval)
         return retval
 
-    def _on_update(self, *args):  # pylint: disable=unused-argument
+    def _on_update(self, *args):  # pylint:disable=unused-argument
         """ Update the master variable on a check button change.
 
         The value for this checked option is added or removed from the :attr:`_master_variable`
@@ -756,7 +790,7 @@ class MultiOption(ttk.Checkbutton):  # pylint: disable=too-many-ancestors
         logger.trace("Setting master variable to: %s", val)
         self._master_variable.set(val)
 
-    def _on_master_update(self, *args):  # pylint: disable=unused-argument
+    def _on_master_update(self, *args):  # pylint:disable=unused-argument
         """ Update the check button on a master variable change (e.g. load .fsw file in the GUI).
 
         The value for this option is set to ``True`` or ``False`` depending on it's existence in
@@ -984,3 +1018,6 @@ class ToggledFrame(ttk.Frame):  # pylint:disable=too-many-ancestors
             self.sub_frame.pack(fill=tk.X, expand=True)
             self._icon_var.set("-")
             self._toggle_var.set(1)
+
+
+__all__ = get_module_objects(__name__)

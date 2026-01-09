@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """ Dummy functions for running faceswap on CPU. """
 
-
-from typing import List
+from lib.utils import get_module_objects
 
 from ._base import _GPUStats
 
@@ -65,7 +64,7 @@ class CPUStats(_GPUStats):
         self._log("debug", f"GPU Driver: {driver}")
         return driver
 
-    def _get_device_names(self) -> List[str]:
+    def _get_device_names(self) -> list[str]:
         """ Obtain the list of names of connected GPUs as identified in :attr:`_handles`.
 
         Returns
@@ -73,11 +72,11 @@ class CPUStats(_GPUStats):
         list
             An empty list for CPU backends
         """
-        names: List[str] = []
+        names: list[str] = []
         self._log("debug", f"GPU Devices: {names}")
         return names
 
-    def _get_vram(self) -> List[int]:
+    def _get_vram(self) -> list[int]:
         """ Obtain the RAM in Megabytes for the running system.
 
         Returns
@@ -85,11 +84,11 @@ class CPUStats(_GPUStats):
         list
             An empty list for CPU backends
         """
-        vram: List[int] = []
+        vram: list[int] = []
         self._log("debug", f"GPU VRAM: {vram}")
         return vram
 
-    def _get_free_vram(self) -> List[int]:
+    def _get_free_vram(self) -> list[int]:
         """ Obtain the amount of RAM that is available, in Megabytes, for the running system.
 
         Returns
@@ -97,6 +96,19 @@ class CPUStats(_GPUStats):
         list
              An empty list for CPU backends
         """
-        vram: List[int] = []
+        vram: list[int] = []
         self._log("debug", f"GPU VRAM free: {vram}")
         return vram
+
+    def exclude_devices(self, devices: list[int]) -> None:
+        """ CPU does not support excluding devices
+
+        Parameters
+        ----------
+        devices: list[int]
+            The GPU device IDS to be excluded
+        """
+        self._log("warning", "CPU does not support excluding GPUs. This option has been ignored")
+
+
+__all__ = get_module_objects(__name__)

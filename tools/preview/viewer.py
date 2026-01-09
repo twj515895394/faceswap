@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """ Manages the widgets that hold the top 'viewer' area of the preview tool """
+from __future__ import annotations
 import logging
 import os
 import tkinter as tk
-from tkinter import ttk
+import typing as T
 
+from tkinter import ttk
 from dataclasses import dataclass, field
-from typing import cast, List, Optional, Tuple, TYPE_CHECKING
 
 import cv2
 import numpy as np
@@ -14,10 +15,11 @@ from PIL import Image, ImageTk
 
 from lib.align import transform_image
 from lib.align.aligned_face import CenteringType
+from lib.utils import get_module_objects
 from scripts.convert import ConvertItem
 
 
-if TYPE_CHECKING:
+if T.TYPE_CHECKING:
     from .preview import Preview
 
 logger = logging.getLogger(__name__)
@@ -26,13 +28,13 @@ logger = logging.getLogger(__name__)
 @dataclass
 class _Faces:
     """ Dataclass for holding faces """
-    filenames: List[str] = field(default_factory=list)
-    matrix: List[np.ndarray] = field(default_factory=list)
-    src: List[np.ndarray] = field(default_factory=list)
-    dst: List[np.ndarray] = field(default_factory=list)
+    filenames: list[str] = field(default_factory=list)
+    matrix: list[np.ndarray] = field(default_factory=list)
+    src: list[np.ndarray] = field(default_factory=list)
+    dst: list[np.ndarray] = field(default_factory=list)
 
 
-class FacesDisplay():
+class FacesDisplay():  # pylint:disable=too-many-instance-attributes
     """ Compiles the 2 rows of sample faces (original and swapped) into a single image
 
     Parameters
@@ -55,7 +57,7 @@ class FacesDisplay():
         The list of :class:`numpy.ndarray` swapped and patched preview images for bottom row of
         display
     """
-    def __init__(self, app: 'Preview', size: int, padding: int) -> None:
+    def __init__(self, app: Preview, size: int, padding: int) -> None:
         logger.trace("Initializing %s: (app: %s, size: %s, padding: %s)",  # type: ignore
                      self.__class__.__name__, app, size, padding)
         self._size = size
@@ -64,21 +66,21 @@ class FacesDisplay():
         self._padding = padding
 
         self._faces = _Faces()
-        self._centering: Optional[CenteringType] = None
+        self._centering: CenteringType | None = None
         self._faces_source: np.ndarray = np.array([])
         self._faces_dest: np.ndarray = np.array([])
-        self._tk_image: Optional[ImageTk.PhotoImage] = None
+        self._tk_image: ImageTk.PhotoImage | None = None
 
         # Set from Samples
         self.update_source = False
-        self.source: List[ConvertItem] = []  # Source images, filenames + detected faces
+        self.source: list[ConvertItem] = []  # Source images, filenames + detected faces
         # Set from Patch
-        self.destination: List[np.ndarray] = []  # Swapped + patched images
+        self.destination: list[np.ndarray] = []  # Swapped + patched images
 
         logger.trace("Initialized %s", self.__class__.__name__)  # type: ignore
 
     @property
-    def tk_image(self) -> Optional[ImageTk.PhotoImage]:
+    def tk_image(self) -> ImageTk.PhotoImage | None:
         """ :class:`PIL.ImageTk.PhotoImage`: The compiled preview display in tkinter display
         format """
         return self._tk_image
@@ -99,7 +101,7 @@ class FacesDisplay():
         """
         self._centering = centering
 
-    def set_display_dimensions(self, dimensions: Tuple[int, int]) -> None:
+    def set_display_dimensions(self, dimensions: tuple[int, int]) -> None:
         """ Adjust the size of the frame that will hold the preview samples.
 
         Parameters
@@ -117,11 +119,11 @@ class FacesDisplay():
         size = self._get_scale_size(img)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         pilimg = Image.fromarray(img)
-        pilimg = pilimg.resize(size, Image.ANTIALIAS)
+        pilimg = pilimg.resize(size, Image.Resampling.BICUBIC)
         self._tk_image = ImageTk.PhotoImage(pilimg)
         logger.trace("Updated tk image")  # type: ignore
 
-    def _get_scale_size(self, image: np.ndarray) -> Tuple[int, int]:
+    def _get_scale_size(self, image: np.ndarray) -> tuple[int, int]:
         """ Get the size that the full preview image should be resized to fit in the
         display window.
 
@@ -180,7 +182,7 @@ class FacesDisplay():
             src_img = item.inbound.image
             detected_face.load_aligned(src_img,
                                        size=self._size,
-                                       centering=cast(CenteringType, self._centering))
+                                       centering=T.cast(CenteringType, self._centering))
             matrix = detected_face.aligned.matrix
             self._faces.filenames.append(os.path.splitext(item.inbound.filename)[0])
             self._faces.matrix.append(matrix)
@@ -265,7 +267,7 @@ class ImagesCanvas(ttk.Frame):  # pylint:disable=too-many-ancestors
     parent: tkinter object
         The parent tkinter object that holds the canvas
     """
-    def __init__(self, app: 'Preview', parent: ttk.PanedWindow) -> None:
+    def __init__(self, app: Preview, parent: ttk.PanedWindow) -> None:
         logger.debug("Initializing %s: (app: %s, parent: %s)",
                      self.__class__.__name__, app, parent)
         super().__init__(parent)
@@ -293,3 +295,6 @@ class ImagesCanvas(ttk.Frame):  # pylint:disable=too-many-ancestors
         self._display.update_tk_image()
         self._canvas.itemconfig(self._displaycanvas, image=self._display.tk_image)
         logger.debug("Reloaded preview image")
+
+
+__all__ = get_module_objects(__name__)

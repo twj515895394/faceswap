@@ -5,27 +5,30 @@ Plugins should inherit from this class
 
 See the override methods for which methods are required.
 
-The plugin will receive a :class:`~plugins.extract.pipeline.ExtractMedia` object.
+The plugin will receive a :class:`~plugins.extract.extract_media.ExtractMedia` object.
 
 For each source item, the plugin must pass a dict to finalize containing:
 
 >>> {"filename": <filename of source frame>,
 >>>  "detected_faces": <list of bounding box dicts from lib/plugins/extract/detect/_base>}
 """
+from __future__ import annotations
 import logging
+import typing as T
+
 from dataclasses import dataclass, field
-from typing import Generator, List, Optional, Tuple, TYPE_CHECKING
 
 import cv2
 import numpy as np
+from torch.cuda import OutOfMemoryError
 
-from tensorflow.python.framework import errors_impl as tf_errors  # pylint:disable=no-name-in-module  # noqa
+from lib.align import AlignedFace, LandmarkType, transform_image
+from lib.utils import FaceswapError
+from plugins.extract import ExtractMedia
+from plugins.extract._base import BatchType, ExtractorBatch, Extractor
 
-from lib.align import AlignedFace, transform_image
-from lib.utils import get_backend, FaceswapError
-from plugins.extract._base import BatchType, Extractor, ExtractorBatch, ExtractMedia
-
-if TYPE_CHECKING:
+if T.TYPE_CHECKING:
+    from collections.abc import Generator
     from queue import Queue
     from lib.align import DetectedFace
     from lib.align.aligned_face import CenteringType
@@ -44,9 +47,9 @@ class MaskerBatch(ExtractorBatch):
     roi_masks: list
         The region of interest masks for the batch
     """
-    detected_faces: List["DetectedFace"] = field(default_factory=list)
-    roi_masks: List[np.ndarray] = field(default_factory=list)
-    feed_faces: List[AlignedFace] = field(default_factory=list)
+    detected_faces: list[DetectedFace] = field(default_factory=list)
+    roi_masks: list[np.ndarray] = field(default_factory=list)
+    feed_faces: list[AlignedFace] = field(default_factory=list)
 
 
 class Masker(Extractor):  # pylint:disable=abstract-method
@@ -76,12 +79,15 @@ class Masker(Extractor):  # pylint:disable=abstract-method
     plugins.extract.align._base : Aligner parent class for extraction plugins.
     """
 
+    _logged_lm_count_once = False
+
     def __init__(self,
-                 git_model_id: Optional[int] = None,
-                 model_filename: Optional[str] = None,
-                 configfile: Optional[str] = None,
+                 git_model_id: int | None = None,
+                 model_filename: str | None = None,
+                 configfile: str | None = None,
                  instance: int = 0,
                  **kwargs) -> None:
+        # pylint:disable=duplicate-code
         logger.debug("Initializing %s: (configfile: %s)", self.__class__.__name__, configfile)
         super().__init__(git_model_id,
                          model_filename,
@@ -91,20 +97,46 @@ class Masker(Extractor):  # pylint:disable=abstract-method
         self.input_size = 256  # Override for model specific input_size
         self.coverage_ratio = 1.0  # Override for model specific coverage_ratio
 
-        self._plugin_type = "mask"
+        self._info.plugin_type = "mask"
+        # Override if a specific type of landmark data is required:
+        self.landmark_type: LandmarkType | None = None
+
         self._storage_name = self.__module__.rsplit(".", maxsplit=1)[-1].replace("_", "-")
-        self._storage_centering: "CenteringType" = "face"  # Centering to store the mask at
+        self._storage_centering: CenteringType = "face"  # Centering to store the mask at
         self._storage_size = 128  # Size to store masks at. Leave this at default
         logger.debug("Initialized %s", self.__class__.__name__)
 
-    def get_batch(self, queue: "Queue") -> Tuple[bool, MaskerBatch]:
+    @property
+    def storage_centering(self) -> CenteringType:
+        """ Literal["face", "head", "legacy"] : The centering that the mask is stored at """
+        return self._storage_centering
+
+    def _maybe_log_warning(self, face: AlignedFace) -> None:
+        """ Log a warning, once, if we do not have full facial landmarks
+
+        Parameters
+        ----------
+        face: :class:`~lib.align.aligned_face.AlignedFace`
+            The aligned face object to test the landmark type for
+        """
+        if face.landmark_type != LandmarkType.LM_2D_4 or self._logged_lm_count_once:
+            return
+
+        msg = "are likely to be sub-standard"
+        msg = "can not be be generated" if self.name in ("Components", "Extended") else msg
+
+        logger.warning("Extracted faces do not contain facial landmark data. '%s' masks %s.",
+                       self.name, msg)
+        self._logged_lm_count_once = True
+
+    def get_batch(self, queue: Queue) -> tuple[bool, MaskerBatch]:
         """ Get items for inputting into the masker from the queue in batches
 
         Items are returned from the ``queue`` in batches of
         :attr:`~plugins.extract._base.Extractor.batchsize`
 
-        Items are received as :class:`~plugins.extract.pipeline.ExtractMedia` objects and converted
-        to ``dict`` for internal processing.
+        Items are received as :class:`~plugins.extract.extract_media.ExtractMedia` objects and
+        converted to ``dict`` for internal processing.
 
         To ensure consistent batch sizes for masker the items are split into separate items for
         each :class:`~lib.align.DetectedFace` object.
@@ -160,11 +192,12 @@ class Masker(Extractor):  # pylint:disable=abstract-method
                                         dtype="float32",
                                         is_aligned=item.is_aligned)
 
+                self._maybe_log_warning(feed_face)
+
                 assert feed_face.face is not None
                 if not item.is_aligned:
                     # Split roi mask from feed face alpha channel
-                    roi_mask = feed_face.face[..., 3]
-                    feed_face._face = feed_face.face[..., :3]  # pylint:disable=protected-access
+                    roi_mask = feed_face.split_mask()
                 else:
                     # We have to do the warp here as AlignedFace did not perform it
                     roi_mask = transform_image(roi,
@@ -180,39 +213,39 @@ class Masker(Extractor):  # pylint:disable=abstract-method
                 if idx == self.batchsize:
                     frame_faces = len(item.detected_faces)
                     if f_idx + 1 != frame_faces:
-                        self._rollover = ExtractMedia(
+                        self._tracker.rollover = ExtractMedia(
                             item.filename,
                             item.image,
                             detected_faces=item.detected_faces[f_idx + 1:],
                             is_aligned=item.is_aligned)
-                        logger.trace("Rolled over %s faces of %s to next batch "  # type:ignore
-                                     "for '%s'", len(self._rollover.detected_faces), frame_faces,
+                        logger.trace("Rolled over %s faces of %s "  # type:ignore[attr-defined]
+                                     "to next batch for '%s'",
+                                     len(self._tracker.rollover.detected_faces), frame_faces,
                                      item.filename)
                     break
         if batch:
-            logger.trace("Returning batch: %s",  # type:ignore
+            logger.trace("Returning batch: %s",  # type:ignore[attr-defined]
                          {k: len(v) if isinstance(v, (list, np.ndarray)) else v
                           for k, v in batch.__dict__.items()})
         else:
-            logger.trace(item)  # type:ignore
+            logger.trace(item)  # type:ignore[attr-defined]
         return exhausted, batch
 
     def _predict(self, batch: BatchType) -> MaskerBatch:
         """ Just return the masker's predict function """
         assert isinstance(batch, MaskerBatch)
         assert self.name is not None
-        try:
-            # slightly hacky workaround to deal with landmarks based masks:
-            if self.name.lower() in ("components", "extended"):
-                feed = np.empty(2, dtype="object")
-                feed[0] = batch.feed
-                feed[1] = batch.feed_faces
-            else:
-                feed = batch.feed
+        # slightly hacky workaround to deal with landmarks based masks:
+        if self.name.lower() in ("components", "extended"):
+            feed = np.empty(2, dtype="object")
+            feed[0] = batch.feed
+            feed[1] = batch.feed_faces
+        else:
+            feed = batch.feed
 
+        try:
             batch.prediction = self.predict(feed)
-            return batch
-        except tf_errors.ResourceExhaustedError as err:
+        except OutOfMemoryError as err:
             msg = ("You do not have enough GPU memory available to run detection at the "
                    "selected batch size. You can try a number of things:"
                    "\n1) Close any other application that is using your GPU (web browsers are "
@@ -222,23 +255,8 @@ class Masker(Extractor):  # pylint:disable=abstract-method
                    "CLI: Edit the file faceswap/config/extract.ini)."
                    "\n3) Enable 'Single Process' mode.")
             raise FaceswapError(msg) from err
-        except Exception as err:
-            if get_backend() == "amd":
-                # pylint:disable=import-outside-toplevel
-                from lib.plaidml_utils import is_plaidml_error
-                if (is_plaidml_error(err) and (
-                        "CL_MEM_OBJECT_ALLOCATION_FAILURE" in str(err).upper() or
-                        "enough memory for the current schedule" in str(err).lower())):
-                    msg = ("You do not have enough GPU memory available to run detection at "
-                           "the selected batch size. You can try a number of things:"
-                           "\n1) Close any other application that is using your GPU (web "
-                           "browsers are particularly bad for this)."
-                           "\n2) Lower the batchsize (the amount of images fed into the "
-                           "model) by editing the plugin settings (GUI: Settings > Configure "
-                           "extract settings, CLI: Edit the file "
-                           "faceswap/config/extract.ini).")
-                    raise FaceswapError(msg) from err
-            raise
+
+        return batch
 
     def finalize(self, batch: BatchType) -> Generator[ExtractMedia, None, None]:
         """ Finalize the output from Masker
@@ -255,7 +273,7 @@ class Masker(Extractor):  # pylint:disable=abstract-method
 
         Yields
         ------
-        :class:`~plugins.extract.pipeline.ExtractMedia`
+        :class:`~plugins.extract.extract_media.ExtractMedia`
             The :attr:`DetectedFaces` list will be populated for this class with the bounding
             boxes, landmarks and masks for the detected faces found in the frame.
         """
@@ -264,6 +282,10 @@ class Masker(Extractor):  # pylint:disable=abstract-method
                                                    batch.detected_faces,
                                                    batch.feed_faces,
                                                    batch.roi_masks):
+            if self.name in ("Components", "Extended") and not np.any(mask):
+                # Components/Extended masks can return empty when called from the manual tool with
+                # 4 Point ROI landmarks
+                continue
             self._crop_out_of_bounds(mask, roi_mask)
             face.add_mask(self._storage_name,
                           mask,
@@ -277,14 +299,14 @@ class Masker(Extractor):  # pylint:disable=abstract-method
                      {key: val.shape if isinstance(val, np.ndarray) else val
                                       for key, val in batch.__dict__.items()})
         for filename, face in zip(batch.filename, batch.detected_faces):
-            self._output_faces.append(face)
-            if len(self._output_faces) != self._faces_per_filename[filename]:
+            self._tracker.output_faces.append(face)
+            if len(self._tracker.output_faces) != self._tracker.faces_per_filename[filename]:
                 continue
 
             output = self._extract_media.pop(filename)
-            output.add_detected_faces(self._output_faces)
-            self._output_faces = []
-            logger.trace("Yielding: (filename: '%s', image: %s, "  # type:ignore
+            output.add_detected_faces(self._tracker.output_faces)
+            self._tracker.output_faces = []
+            logger.trace("Yielding: (filename: '%s', image: %s, "  # type:ignore[attr-defined]
                          "detected_faces: %s)", output.filename, output.image_shape,
                          len(output.detected_faces))
             yield output
@@ -298,7 +320,7 @@ class Masker(Extractor):  # pylint:disable=abstract-method
         scale = target_size / image_size
         if scale == 1.:
             return image
-        method = cv2.INTER_CUBIC if scale > 1. else cv2.INTER_AREA  # pylint: disable=no-member
+        method = cv2.INTER_CUBIC if scale > 1. else cv2.INTER_AREA
         resized = cv2.resize(image, (0, 0), fx=scale, fy=scale, interpolation=method)
         resized = resized if channels > 1 else resized[..., None]
         return resized

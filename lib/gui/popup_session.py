@@ -8,7 +8,8 @@ import tkinter as tk
 
 from dataclasses import dataclass, field
 from tkinter import ttk
-from typing import Dict, List, Optional, Tuple, Type, Union
+
+from lib.utils import get_module_objects
 
 from .control_helper import ControlBuilder, ControlPanelOption
 from .custom_widgets import Tooltip
@@ -16,7 +17,7 @@ from .display_graph import SessionGraph
 from .analysis import Calculations, Session
 from .utils import FileHandler, get_images, LongRunningTask
 
-logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+logger = logging.getLogger(__name__)
 
 # LOCALES
 _LANG = gettext.translation("gui.tooltips", localedir="locales", fallback=True)
@@ -24,7 +25,7 @@ _ = _LANG.gettext
 
 
 @dataclass
-class SessionTKVars:
+class SessionTKVars:  # pylint:disable=too-many-instance-attributes
     """ Dataclass for holding the tk variables required for the session popup
 
     Parameters
@@ -66,7 +67,7 @@ class SessionTKVars:
     outliers: tk.BooleanVar
     avgiterations: tk.IntVar
     smoothamount: tk.DoubleVar
-    loss_keys: Dict[str, tk.BooleanVar] = field(default_factory=dict)
+    loss_keys: dict[str, tk.BooleanVar] = field(default_factory=dict)
 
 
 class SessionPopUp(tk.Toplevel):
@@ -82,13 +83,13 @@ class SessionPopUp(tk.Toplevel):
         logger.debug("Initializing: %s: (session_id: %s, data_points: %s)",
                      self.__class__.__name__, session_id, data_points)
         super().__init__()
-        self._thread: Optional[LongRunningTask] = None  # Thread for loading data in background
+        self._thread: LongRunningTask | None = None  # Thread for loading data in background
         self._default_view = "avg" if data_points > 1000 else "smoothed"
         self._session_id = None if session_id == "Total" else int(session_id)
 
         self._graph_frame = ttk.Frame(self)
-        self._graph: Optional[SessionGraph] = None
-        self._display_data: Optional[Calculations] = None
+        self._graph: SessionGraph | None = None
+        self._display_data: Calculations | None = None
 
         self._vars = self._set_vars()
 
@@ -172,7 +173,7 @@ class SessionPopUp(tk.Toplevel):
             The frame that the options reside in
         """
         logger.debug("Building Combo boxes")
-        choices = dict(Display=("Loss", "Rate"), Scale=("Linear", "Log"))
+        choices = {"Display": ("Loss", "Rate"), "Scale": ("Linear", "Log")}
 
         for item in ["Display", "Scale"]:
             var: tk.StringVar = getattr(self._vars, item.lower())
@@ -271,13 +272,18 @@ class SessionPopUp(tk.Toplevel):
 
         self._add_section(frame, "Parameters")
         logger.debug("Building Slider Controls")
+        text = ""
+        dtype: type[int] | type[float] = int
+        default: int | float = 0
+        rounding = 0
+        min_max: tuple[int, int | float] = (0, 0)
         for item in ("avgiterations", "smoothamount"):
             if item == "avgiterations":
-                dtype: Union[Type[int], Type[float]] = int
+                dtype = int
                 text = "Iterations to Average:"
-                default: Union[int, float] = 500
+                default = 500
                 rounding = 25
-                min_max: Tuple[int, Union[int, float]] = (25, 2500)
+                min_max = (25, 2500)
             elif item == "smoothamount":
                 dtype = float
                 text = "Smoothing Amount:"
@@ -312,7 +318,7 @@ class SessionPopUp(tk.Toplevel):
         for btntype in ("reload", "save"):
             cmd = getattr(self, f"_option_button_{btntype}")
             btn = ttk.Button(btnframe,
-                             image=get_images().icons[btntype],
+                             image=get_images().icons[btntype],  # type:ignore[arg-type]
                              command=cmd)
             hlp = self._set_help(btntype)
             Tooltip(btn, text=hlp, wrap_length=200)
@@ -356,7 +362,7 @@ class SessionPopUp(tk.Toplevel):
             csvout.writerow(fieldnames)
             csvout.writerows(zip(*[save_data[key] for key in fieldnames]))
 
-    def _option_button_reload(self, *args) -> None:  # pylint: disable=unused-argument
+    def _option_button_reload(self, *args) -> None:  # pylint:disable=unused-argument
         """ Action for reset button press and checkbox changes.
 
         Parameters
@@ -377,7 +383,7 @@ class SessionPopUp(tk.Toplevel):
                             self._vars.scale.get())
         logger.debug("Refreshed Graph")
 
-    def _graph_scale(self, *args) -> None:  # pylint: disable=unused-argument
+    def _graph_scale(self, *args) -> None:  # pylint:disable=unused-argument
         """ Action for changing graph scale.
 
         Parameters
@@ -404,20 +410,20 @@ class SessionPopUp(tk.Toplevel):
         str
             The help text for the given action
         """
-        lookup = dict(
-            reload=_("Refresh graph"),
-            save=_("Save display data to csv"),
-            avgiterations=_("Number of data points to sample for rolling average"),
-            smoothamount=_("Set the smoothing amount. 0 is no smoothing, 0.99 is maximum "
-                           "smoothing"),
-            outliers=_("Flatten data points that fall more than 1 standard deviation from the "
-                       "mean to the mean value."),
-            avg=_("Display rolling average of the data"),
-            smoothed=_("Smooth the data"),
-            raw=_("Display raw data"),
-            trend=_("Display polynormal data trend"),
-            display=_("Set the data to display"),
-            scale=_("Change y-axis scale"))
+        lookup = {
+            "reload": _("Refresh graph"),
+            "save": _("Save display data to csv"),
+            "avgiterations": _("Number of data points to sample for rolling average"),
+            "smoothamount": _("Set the smoothing amount. 0 is no smoothing, 0.99 is maximum "
+                              "smoothing"),
+            "outliers": _("Flatten data points that fall more than 1 standard deviation from the "
+                          "mean to the mean value."),
+            "avg": _("Display rolling average of the data"),
+            "smoothed": _("Smooth the data"),
+            "raw": _("Display raw data"),
+            "trend": _("Display polynormal data trend"),
+            "display": _("Set the data to display"),
+            "scale": _("Change y-axis scale")}
         return lookup.get(action.lower(), "")
 
     def _compile_display_data(self) -> bool:
@@ -446,13 +452,13 @@ class SessionPopUp(tk.Toplevel):
             self._lbl_loading.pack(fill=tk.BOTH, expand=True)
             self.update_idletasks()
 
-            kwargs = dict(session_id=self._session_id,
-                          display=self._vars.display.get(),
-                          loss_keys=loss_keys,
-                          selections=selections,
-                          avg_samples=self._vars.avgiterations.get(),
-                          smooth_amount=self._vars.smoothamount.get(),
-                          flatten_outliers=self._vars.outliers.get())
+            kwargs = {"session_id": self._session_id,
+                      "display": self._vars.display.get(),
+                      "loss_keys": loss_keys,
+                      "selections": selections,
+                      "avg_samples": self._vars.avgiterations.get(),
+                      "smooth_amount": self._vars.smoothamount.get(),
+                      "flatten_outliers": self._vars.outliers.get()}
             self._thread = LongRunningTask(target=self._get_display_data,
                                            kwargs=kwargs,
                                            widget=self)
@@ -491,7 +497,7 @@ class SessionPopUp(tk.Toplevel):
         """
         return Calculations(**kwargs)
 
-    def _check_valid_selection(self, loss_keys: List[str], selections: List[str]) -> bool:
+    def _check_valid_selection(self, loss_keys: list[str], selections: list[str]) -> bool:
         """ Check that there will be data to display.
 
         Parameters
@@ -530,7 +536,7 @@ class SessionPopUp(tk.Toplevel):
             return False
         return True
 
-    def _selections_to_list(self) -> List[str]:
+    def _selections_to_list(self) -> list[str]:
         """ Compile checkbox selections to a list.
 
         Returns
@@ -578,3 +584,6 @@ class SessionPopUp(tk.Toplevel):
         self._vars.status.set("")
         self._vars.buildgraph.set(False)
         logger.debug("Built Graph")
+
+
+__all__ = get_module_objects(__name__)

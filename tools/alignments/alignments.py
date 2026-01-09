@@ -3,22 +3,23 @@
 import logging
 import os
 import sys
+import typing as T
 
 from argparse import Namespace
 from multiprocessing import Process
-from typing import Any, cast, List, Dict, Optional
 
-from lib.utils import _video_extensions, FaceswapError
+from lib.utils import (get_module_objects, FaceswapError,
+                       handle_deprecated_cliopts, VIDEO_EXTENSIONS)
 from .media import AlignmentData
-from .jobs import Check, Sort, Spatial  # noqa pylint: disable=unused-import
-from .jobs_faces import FromFaces, RemoveFaces, Rename  # noqa pylint: disable=unused-import
-from .jobs_frames import Draw, Extract  # noqa pylint: disable=unused-import
+from .jobs import Check, Export, Sort, Spatial  # noqa pylint:disable=unused-import
+from .jobs_faces import FromFaces, RemoveFaces, Rename  # noqa pylint:disable=unused-import
+from .jobs_frames import Draw, Extract  # noqa pylint:disable=unused-import
 
 
-logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+logger = logging.getLogger(__name__)
 
 
-class Alignments():  # pylint:disable=too-few-public-methods
+class Alignments():
     """ The main entry point for Faceswap's Alignments Tool. This tool is part of the Faceswap
     Tools suite and should be called from the ``python tools.py alignments`` command.
 
@@ -34,7 +35,7 @@ class Alignments():  # pylint:disable=too-few-public-methods
     """
     def __init__(self, arguments: Namespace) -> None:
         logger.debug("Initializing %s: (arguments: %s)", self.__class__.__name__, arguments)
-        self._requires_alignments = ["sort", "spatial"]
+        self._requires_alignments = ["export", "sort", "spatial"]
         self._requires_faces = ["extract", "from-faces"]
         self._requires_frames = ["draw",
                                  "extract",
@@ -42,7 +43,7 @@ class Alignments():  # pylint:disable=too-few-public-methods
                                  "missing-frames",
                                  "no-faces"]
 
-        self._args = arguments
+        self._args = handle_deprecated_cliopts(arguments)
         self._batch_mode = self._validate_batch_mode()
         self._locations = self._get_locations()
 
@@ -66,7 +67,7 @@ class Alignments():  # pylint:disable=too-few-public-methods
         logger.debug("Running in batch mode")
         return batch_mode
 
-    def _get_alignments_locations(self) -> Dict[str, List[Optional[str]]]:
+    def _get_alignments_locations(self) -> dict[str, list[str | None]]:
         """ Obtain the full path to alignments files in a parent (batch) location
 
         These are jobs that only require an alignments file as input, so frames and face locations
@@ -92,12 +93,12 @@ class Alignments():  # pylint:disable=too-few-public-methods
             sys.exit(1)
 
         logger.info("Batch mode selected. Processing alignments: %s", alignments)
-        retval = dict(alignments_file=alignments,
-                      faces_dir=[None for _ in range(len(alignments))],
-                      frames_dir=[None for _ in range(len(alignments))])
+        retval = {"alignments_file": alignments,
+                  "faces_dir": [None for _ in range(len(alignments))],
+                  "frames_dir": [None for _ in range(len(alignments))]}
         return retval
 
-    def _get_frames_locations(self) -> Dict[str, List[Optional[str]]]:
+    def _get_frames_locations(self) -> dict[str, list[str | None]]:
         """ Obtain the full path to frame locations along with corresponding alignments file
         locations contained within the parent (batch) location
 
@@ -117,7 +118,7 @@ class Alignments():  # pylint:disable=too-few-public-methods
         candidates = [os.path.join(self._args.frames_dir, fname)
                       for fname in os.listdir(self._args.frames_dir)
                       if os.path.isdir(os.path.join(self._args.frames_dir, fname))
-                      or os.path.splitext(fname)[-1].lower() in _video_extensions]
+                      or os.path.splitext(fname)[-1].lower() in VIDEO_EXTENSIONS]
         logger.debug("Frame candidates: %s", candidates)
 
         for candidate in candidates:
@@ -138,7 +139,7 @@ class Alignments():  # pylint:disable=too-few-public-methods
             sys.exit(1)
 
         if self._args.job not in self._requires_faces:  # faces not required for frames input
-            faces: list[Optional[str]] = [None for _ in range(len(frames))]
+            faces: list[str | None] = [None for _ in range(len(frames))]
         else:
             if not self._args.faces_dir:
                 logger.error("Please provide a 'faces_dir' location for '%s' job", self._args.job)
@@ -149,11 +150,11 @@ class Alignments():  # pylint:disable=too-few-public-methods
         logger.info("Batch mode selected. Processing frames: %s",
                     [os.path.basename(frame) for frame in frames])
 
-        return dict(alignments_file=cast(List[Optional[str]], alignments),
-                    frames_dir=cast(List[Optional[str]], frames),
-                    faces_dir=faces)
+        return {"alignments_file": T.cast(list[str | None], alignments),
+                "frames_dir": T.cast(list[str | None], frames),
+                "faces_dir": faces}
 
-    def _get_locations(self) -> Dict[str, List[Optional[str]]]:
+    def _get_locations(self) -> dict[str, list[str | None]]:
         """ Obtain the full path to any frame, face and alignments input locations for the
         selected job when running in batch mode. If not running in batch mode, then the original
         passed in values are returned in lists
@@ -166,9 +167,9 @@ class Alignments():  # pylint:disable=too-few-public-methods
         """
         job: str = self._args.job
         if not self._batch_mode:  # handle with given arguments
-            retval = dict(alignments_file=[self._args.alignments_file],
-                          faces_dir=[self._args.faces_dir],
-                          frames_dir=[self._args.frames_dir])
+            retval = {"alignments_file": [self._args.alignments_file],
+                      "faces_dir": [self._args.faces_dir],
+                      "frames_dir": [self._args.frames_dir]}
 
         elif job in self._requires_alignments:  # Jobs only requiring an alignments file location
             retval = self._get_alignments_locations()
@@ -185,9 +186,9 @@ class Alignments():  # pylint:disable=too-few-public-methods
                 logger.error("No folders found in '%s'", self._args.faces_dir)
                 sys.exit(1)
 
-            retval = dict(faces_dir=faces,
-                          frames_dir=[None for _ in range(len(faces))],
-                          alignments_file=[None for _ in range(len(faces))])
+            retval = {"faces_dir": faces,
+                      "frames_dir": [None for _ in range(len(faces))],
+                      "alignments_file": [None for _ in range(len(faces))]}
             logger.info("Batch mode selected. Processing faces: %s",
                         [os.path.basename(folder) for folder in faces])
         else:
@@ -239,7 +240,7 @@ class Alignments():  # pylint:disable=too-few-public-methods
                 self._run_process(args)
 
 
-class _Alignments():  # pylint:disable=too-few-public-methods
+class _Alignments():
     """ The main entry point for Faceswap's Alignments Tool. This tool is part of the Faceswap
     Tools suite and should be called from the ``python tools.py alignments`` command.
 
@@ -259,6 +260,11 @@ class _Alignments():  # pylint:disable=too-few-public-methods
             self.alignments = None
         else:
             self.alignments = AlignmentData(self._find_alignments())
+
+        if (self.alignments is not None and
+                arguments.frames_dir and
+                os.path.isfile(arguments.frames_dir)):
+            self.alignments.update_legacy_has_source(os.path.basename(arguments.frames_dir))
 
         logger.debug("Initialized %s", self.__class__.__name__)
 
@@ -289,7 +295,7 @@ class _Alignments():  # pylint:disable=too-few-public-methods
         if os.path.isdir(frames) and os.path.exists(os.path.join(frames, fname)):
             return fname
 
-        if os.path.isdir(frames) or os.path.splitext(frames)[-1] not in _video_extensions:
+        if os.path.isdir(frames) or os.path.splitext(frames)[-1] not in VIDEO_EXTENSIONS:
             logger.error("Can't find a valid alignments file in location: %s", frames)
             sys.exit(1)
 
@@ -306,9 +312,12 @@ class _Alignments():  # pylint:disable=too-few-public-methods
         Launches the selected alignments job.
         """
         if self._args.job in ("missing-alignments", "missing-frames", "multi-faces", "no-faces"):
-            job: Any = Check
+            job: T.Any = Check
         else:
             job = globals()[self._args.job.title().replace("-", "")]
         job = job(self.alignments, self._args)
         logger.debug(job)
         job.process()
+
+
+__all__ = get_module_objects(__name__)
