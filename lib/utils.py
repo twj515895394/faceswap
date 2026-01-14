@@ -8,7 +8,10 @@ import json
 import logging
 import os
 import sys
-import tkinter as tk
+try:
+    import tkinter as tk
+except ImportError:
+    tk = None
 import typing as T
 import zipfile
 
@@ -315,6 +318,9 @@ def get_dpi() -> float | None:
     96.0
     """
     logger = logging.getLogger(__name__)
+    if tk is None:
+        logger.warning("Tkinter not available. Could not obtain DPI")
+        return None
     try:
         root = tk.Tk()
         dpi = root.winfo_fpixels('1i')
